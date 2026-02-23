@@ -21,7 +21,7 @@ enum Commands {
     Devices,
     /// Monitor MIDI input in real-time (hit pads to see messages)
     Monitor {
-        /// MIDI input port index (use 'devices' command to list)
+        /// MIDI port number from 'drumkit devices' (e.g. --port 1). Prompts if omitted.
         #[arg(short, long)]
         port: Option<usize>,
     },
@@ -46,7 +46,8 @@ fn cmd_devices() -> Result<()> {
         println!("  [{}] {}", device.port_index, device.name);
     }
     println!();
-    println!("Use: drumkit monitor --port <index>");
+    println!("Use: drumkit monitor --port <number>");
+    println!("  e.g. drumkit monitor --port 1");
 
     Ok(())
 }
@@ -120,13 +121,23 @@ fn cmd_monitor(port: Option<usize>) -> Result<()> {
     loop {
         match rx.recv() {
             Ok(msg) => {
+                // Silently skip MIDI clock/timing messages
+                if matches!(msg.message, midi::MidiMessage::SystemRealtime { .. }) {
+                    continue;
+                }
                 let line = format!("{}", msg.message);
                 match msg.message {
                     midi::MidiMessage::NoteOn { .. } => {
                         println!("{}", line.with(style::Color::Cyan));
                     }
+                    midi::MidiMessage::NoteOff { .. } => {
+                        println!("{}", line.with(style::Color::DarkGrey));
+                    }
                     midi::MidiMessage::PolyAftertouch { .. } => {
                         println!("{}", line.with(style::Color::Yellow));
+                    }
+                    midi::MidiMessage::ControlChange { .. } => {
+                        println!("{}", line.with(style::Color::Magenta));
                     }
                     _ => {
                         println!("{}", line.with(style::Color::DarkGrey));

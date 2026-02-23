@@ -26,6 +26,10 @@ pub enum MidiMessage {
         controller: u8,
         value: u8,
     },
+    /// MIDI system real-time messages (clock, start, stop, etc.) — filtered from display
+    SystemRealtime {
+        status: u8,
+    },
     Other {
         data: Vec<u8>,
     },
@@ -36,6 +40,11 @@ impl MidiMessage {
     pub fn parse(data: &[u8]) -> Self {
         if data.is_empty() {
             return MidiMessage::Other { data: data.to_vec() };
+        }
+
+        // System real-time messages (single byte, 0xF8-0xFF)
+        if data.len() == 1 && data[0] >= 0xF8 {
+            return MidiMessage::SystemRealtime { status: data[0] };
         }
 
         let status = data[0] & 0xF0;
@@ -157,6 +166,18 @@ impl fmt::Display for MidiMessage {
                     name = cc_name,
                 )
             }
+            MidiMessage::SystemRealtime { status } => {
+                let name = match status {
+                    0xF8 => "Clock",
+                    0xFA => "Start",
+                    0xFB => "Continue",
+                    0xFC => "Stop",
+                    0xFE => "Active Sensing",
+                    0xFF => "Reset",
+                    _ => "Unknown",
+                };
+                write!(f, "SYSTEM    {name}")
+            }
             MidiMessage::Other { data } => {
                 write!(f, "OTHER     {:02X?}", data)
             }
@@ -192,7 +213,7 @@ pub fn list_devices() -> Result<Vec<MidiDevice>> {
 
 /// Timestamped MIDI message from the callback
 pub struct TimestampedMessage {
-    pub timestamp_us: u64,
+    pub _timestamp_us: u64,
     pub message: MidiMessage,
 }
 
@@ -219,7 +240,7 @@ pub fn connect(
             move |timestamp_us, data, _| {
                 let message = MidiMessage::parse(data);
                 let _ = tx.send(TimestampedMessage {
-                    timestamp_us,
+                    _timestamp_us: timestamp_us,
                     message,
                 });
             },
@@ -309,6 +330,18 @@ mod tests {
     fn parse_short_data() {
         let msg = MidiMessage::parse(&[0x90]);
         assert_eq!(msg, MidiMessage::Other { data: vec![0x90] });
+    }
+
+    #[test]
+    fn parse_system_realtime_clock() {
+        let msg = MidiMessage::parse(&[0xF8]);
+        assert_eq!(msg, MidiMessage::SystemRealtime { status: 0xF8 });
+    }
+
+    #[test]
+    fn parse_system_realtime_active_sensing() {
+        let msg = MidiMessage::parse(&[0xFE]);
+        assert_eq!(msg, MidiMessage::SystemRealtime { status: 0xFE });
     }
 
     #[test]
