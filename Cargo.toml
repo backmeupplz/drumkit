@@ -1,0 +1,24 @@
+[package]
+name = "drumkit"
+version = "0.1.0"
+edition = "2024"
+authors = ["backmeupplz"]
+description = "Low-latency TUI MIDI drum sampler for electronic drum kits"
+license = "MIT"
+repository = "https://github.com/backmeupplz/drumkit"
+homepage = "https://github.com/backmeupplz/drumkit"
+keywords = ["midi", "drums", "sampler", "tui", "audio"]
+categories = ["multimedia::audio", "command-line-utilities"]
+readme = "README.md"
+
+[dependencies]
+midir = "0.10"
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
+anyhow = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
