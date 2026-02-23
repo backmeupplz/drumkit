@@ -118,6 +118,45 @@ fn select_port(devices: &[midi::MidiDevice]) -> Result<usize> {
     Ok(port)
 }
 
+fn select_audio_device(devices: &[audio::AudioDevice]) -> Result<usize> {
+    println!("Audio output devices:");
+    println!();
+    for device in devices {
+        println!("  [{}] {}", device.index, device.name);
+    }
+    println!();
+    print!("Select audio device: ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let idx: usize = input
+        .trim()
+        .parse()
+        .context("Invalid device number")?;
+
+    if idx >= devices.len() {
+        anyhow::bail!("Device index {} out of range (0-{})", idx, devices.len() - 1);
+    }
+
+    Ok(idx)
+}
+
+/// Resolve audio device index: use provided value, or prompt if omitted.
+fn resolve_audio_device(device: Option<usize>) -> Result<Option<usize>> {
+    match device {
+        Some(d) => Ok(Some(d)),
+        None => {
+            let devices = audio::list_output_devices()?;
+            if devices.is_empty() {
+                anyhow::bail!("No audio output devices found.");
+            }
+            let idx = select_audio_device(&devices)?;
+            Ok(Some(idx))
+        }
+    }
+}
+
 fn cmd_monitor(port: Option<usize>) -> Result<()> {
     let devices = midi::list_devices()?;
 
@@ -216,6 +255,7 @@ fn cmd_audio_devices() -> Result<()> {
 }
 
 fn cmd_test_sound(file: PathBuf, device: Option<usize>) -> Result<()> {
+    let device = resolve_audio_device(device)?;
     let data = sample::load_wav(&file)?;
     println!(
         "Loaded: {} ({} Hz, {} ch, {:.2}s)",
@@ -233,6 +273,7 @@ fn cmd_test_sound(file: PathBuf, device: Option<usize>) -> Result<()> {
 }
 
 fn cmd_test_trigger(file: PathBuf, note: u8, port: Option<usize>, device: Option<usize>) -> Result<()> {
+    let device = resolve_audio_device(device)?;
     let data = sample::load_wav(&file)?;
     let duration_s = data.samples.len() as f64 / (data.sample_rate as f64 * data.channels as f64);
     println!(
@@ -317,6 +358,7 @@ fn cmd_test_trigger(file: PathBuf, note: u8, port: Option<usize>, device: Option
 }
 
 fn cmd_play(kit_path: PathBuf, port: Option<usize>, device: Option<usize>) -> Result<()> {
+    let device = resolve_audio_device(device)?;
     let loaded_kit = kit::load_kit(&kit_path)?;
 
     // Set up rtrb ring buffer for MIDI→audio communication
@@ -345,7 +387,7 @@ fn cmd_play(kit_path: PathBuf, port: Option<usize>, device: Option<usize>) -> Re
         None => select_port(&devices)?,
     };
 
-    let note_samples = loaded_kit.note_samples.clone();
+    let kit_notes = loaded_kit.notes.clone();
 
     // Connect MIDI with a raw callback — no allocation in the hot path
     let _connection = midi::connect_callback(port_index, move |_timestamp, data| {
@@ -356,12 +398,14 @@ fn cmd_play(kit_path: PathBuf, port: Option<usize>, device: Option<usize>) -> Re
 
             // Note-on with velocity > 0
             if status == 0x90 && velocity > 0 {
-                if let Some(samples) = note_samples.get(&note) {
-                    let gain = velocity as f32 / 127.0;
-                    let _ = producer.push(audio::AudioCommand::Trigger {
-                        samples: Arc::clone(samples),
-                        gain,
-                    });
+                if let Some(group) = kit_notes.get(&note) {
+                    if let Some(samples) = group.select(velocity) {
+                        let gain = velocity as f32 / 127.0;
+                        let _ = producer.push(audio::AudioCommand::Trigger {
+                            samples: Arc::clone(samples),
+                            gain,
+                        });
+                    }
                 }
             }
         }
