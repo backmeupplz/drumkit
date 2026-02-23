@@ -1,4 +1,5 @@
 mod audio;
+mod kit;
 mod midi;
 mod sample;
 
@@ -35,6 +36,33 @@ enum Commands {
         /// Path to a WAV file
         #[arg(short, long)]
         file: PathBuf,
+        /// Audio device index from 'drumkit audio-devices'. Uses default if omitted.
+        #[arg(short, long)]
+        device: Option<usize>,
+    },
+    /// Trigger a sample from a MIDI note (hit a pad → hear a sound)
+    TestTrigger {
+        /// Path to a WAV file to play on trigger
+        #[arg(short, long)]
+        file: PathBuf,
+        /// MIDI note number to trigger on (e.g. 36 for kick)
+        #[arg(short, long)]
+        note: u8,
+        /// MIDI port number from 'drumkit devices'
+        #[arg(short, long)]
+        port: Option<usize>,
+        /// Audio device index from 'drumkit audio-devices'. Uses default if omitted.
+        #[arg(short, long)]
+        device: Option<usize>,
+    },
+    /// Play a full drum kit — load samples from a folder, trigger by MIDI note
+    Play {
+        /// Path to kit directory containing WAV files (e.g. 36.wav, 38.wav)
+        #[arg(short, long)]
+        kit: PathBuf,
+        /// MIDI port number from 'drumkit devices'. Prompts if omitted.
+        #[arg(short, long)]
+        port: Option<usize>,
         /// Audio device index from 'drumkit audio-devices'. Uses default if omitted.
         #[arg(short, long)]
         device: Option<usize>,
@@ -204,6 +232,159 @@ fn cmd_test_sound(file: PathBuf, device: Option<usize>) -> Result<()> {
     Ok(())
 }
 
+fn cmd_test_trigger(file: PathBuf, note: u8, port: Option<usize>, device: Option<usize>) -> Result<()> {
+    let data = sample::load_wav(&file)?;
+    let duration_s = data.samples.len() as f64 / (data.sample_rate as f64 * data.channels as f64);
+    println!(
+        "Loaded: {} ({} Hz, {} ch, {:.2}s)",
+        file.display(),
+        data.sample_rate,
+        data.channels,
+        duration_s,
+    );
+
+    let samples = Arc::new(data.samples);
+
+    // Set up rtrb ring buffer for MIDI→audio communication
+    let (mut producer, consumer) = rtrb::RingBuffer::new(64);
+
+    // Start persistent audio output stream
+    let _stream = audio::run_output_stream(device, consumer, data.sample_rate, data.channels)?;
+
+    // Resolve MIDI port
+    let devices = midi::list_devices()?;
+    if devices.is_empty() {
+        anyhow::bail!("No MIDI input devices found. Connect your drum module via USB.");
+    }
+
+    let port_index = match port {
+        Some(p) => {
+            if p >= devices.len() {
+                anyhow::bail!(
+                    "Port index {} out of range (0-{})",
+                    p,
+                    devices.len() - 1
+                );
+            }
+            p
+        }
+        None => select_port(&devices)?,
+    };
+
+    let target_note = note;
+    let trigger_samples = Arc::clone(&samples);
+
+    // Connect MIDI with a raw callback — no allocation in the hot path
+    let _connection = midi::connect_callback(port_index, move |_timestamp, data| {
+        if data.len() == 3 {
+            let status = data[0] & 0xF0;
+            let msg_note = data[1];
+            let velocity = data[2];
+
+            // Note-on with velocity > 0 matching our target note
+            if status == 0x90 && velocity > 0 && msg_note == target_note {
+                let gain = velocity as f32 / 127.0;
+                let _ = producer.push(audio::AudioCommand::Trigger {
+                    samples: Arc::clone(&trigger_samples),
+                    gain,
+                });
+            }
+        }
+    })?;
+
+    let drum = midi::drum_name(note);
+    println!();
+    println!(
+        "{}",
+        format!("Listening on: {}", devices[port_index].name)
+            .with(style::Color::Green)
+    );
+    println!(
+        "{}",
+        format!("Trigger note: {} ({})", note, drum)
+            .with(style::Color::Cyan)
+    );
+    println!(
+        "{}",
+        "Hit the pad! Press Ctrl+C to quit."
+            .with(style::Color::DarkGrey)
+    );
+
+    // Park the main thread until Ctrl+C
+    std::thread::park();
+
+    Ok(())
+}
+
+fn cmd_play(kit_path: PathBuf, port: Option<usize>, device: Option<usize>) -> Result<()> {
+    let loaded_kit = kit::load_kit(&kit_path)?;
+
+    // Set up rtrb ring buffer for MIDI→audio communication
+    let (mut producer, consumer) = rtrb::RingBuffer::new(64);
+
+    // Start persistent audio output stream
+    let _stream = audio::run_output_stream(device, consumer, loaded_kit.sample_rate, loaded_kit.channels)?;
+
+    // Resolve MIDI port
+    let devices = midi::list_devices()?;
+    if devices.is_empty() {
+        anyhow::bail!("No MIDI input devices found. Connect your drum module via USB.");
+    }
+
+    let port_index = match port {
+        Some(p) => {
+            if p >= devices.len() {
+                anyhow::bail!(
+                    "Port index {} out of range (0-{})",
+                    p,
+                    devices.len() - 1
+                );
+            }
+            p
+        }
+        None => select_port(&devices)?,
+    };
+
+    let note_samples = loaded_kit.note_samples.clone();
+
+    // Connect MIDI with a raw callback — no allocation in the hot path
+    let _connection = midi::connect_callback(port_index, move |_timestamp, data| {
+        if data.len() == 3 {
+            let status = data[0] & 0xF0;
+            let note = data[1];
+            let velocity = data[2];
+
+            // Note-on with velocity > 0
+            if status == 0x90 && velocity > 0 {
+                if let Some(samples) = note_samples.get(&note) {
+                    let gain = velocity as f32 / 127.0;
+                    let _ = producer.push(audio::AudioCommand::Trigger {
+                        samples: Arc::clone(samples),
+                        gain,
+                    });
+                }
+            }
+        }
+    })?;
+
+    println!();
+    println!(
+        "{}",
+        format!("Listening on: {}", devices[port_index].name)
+            .with(style::Color::Green)
+    );
+    println!(
+        "{}",
+        "Hit your pads! Press Ctrl+C to quit."
+            .with(style::Color::DarkGrey)
+    );
+
+    // Park the main thread until Ctrl+C
+    std::thread::park();
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -212,5 +393,9 @@ fn main() -> Result<()> {
         Commands::Monitor { port } => cmd_monitor(port),
         Commands::AudioDevices => cmd_audio_devices(),
         Commands::TestSound { file, device } => cmd_test_sound(file, device),
+        Commands::TestTrigger { file, note, port, device } => {
+            cmd_test_trigger(file, note, port, device)
+        }
+        Commands::Play { kit, port, device } => cmd_play(kit, port, device),
     }
 }

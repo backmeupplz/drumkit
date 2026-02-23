@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::BufferSize;
+use rtrb::Consumer;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -113,6 +114,109 @@ pub fn play_sample(
     Ok(())
 }
 
+/// Command sent from the MIDI thread to the audio thread via rtrb.
+pub enum AudioCommand {
+    /// Trigger a new voice with the given samples and gain (velocity).
+    Trigger { samples: Arc<Vec<f32>>, gain: f32 },
+}
+
+/// A single active playback voice in the mixer.
+pub struct Voice {
+    pub samples: Arc<Vec<f32>>,
+    pub position: usize,
+    pub gain: f32,
+}
+
+impl Voice {
+    /// Returns true when this voice has finished playing all its samples.
+    pub fn is_done(&self) -> bool {
+        self.position >= self.samples.len()
+    }
+}
+
+const MAX_POLYPHONY: usize = 16;
+
+/// Start a persistent audio output stream that mixes voices triggered via rtrb.
+///
+/// The returned `cpal::Stream` must be kept alive — dropping it stops audio.
+pub fn run_output_stream(
+    device_index: Option<usize>,
+    mut consumer: Consumer<AudioCommand>,
+    sample_rate: u32,
+    channels: u16,
+) -> Result<cpal::Stream> {
+    let device = get_device(device_index)?;
+    let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
+
+    let config = cpal::StreamConfig {
+        channels,
+        sample_rate: cpal::SampleRate(sample_rate),
+        buffer_size: BufferSize::Fixed(64),
+    };
+
+    let ch = channels as usize;
+    let mut voices: Vec<Voice> = Vec::with_capacity(MAX_POLYPHONY);
+
+    let stream = device
+        .build_output_stream(
+            &config,
+            move |output: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                // Drain all pending triggers from the ring buffer
+                while let Ok(cmd) = consumer.pop() {
+                    match cmd {
+                        AudioCommand::Trigger { samples, gain } => {
+                            if voices.len() < MAX_POLYPHONY {
+                                voices.push(Voice {
+                                    samples,
+                                    position: 0,
+                                    gain,
+                                });
+                            }
+                            // Excess triggers silently dropped
+                        }
+                    }
+                }
+
+                // Zero the output buffer
+                for sample in output.iter_mut() {
+                    *sample = 0.0;
+                }
+
+                // Mix all active voices into the output
+                let frames = output.len() / ch;
+                for voice in &mut voices {
+                    for frame in 0..frames {
+                        if voice.position >= voice.samples.len() {
+                            break;
+                        }
+                        // Copy available channels from the voice, applying gain
+                        for c in 0..ch {
+                            if voice.position + c < voice.samples.len() {
+                                output[frame * ch + c] +=
+                                    voice.samples[voice.position + c] * voice.gain;
+                            }
+                        }
+                        voice.position += ch;
+                    }
+                }
+
+                // Remove finished voices
+                voices.retain(|v| !v.is_done());
+            },
+            move |err| {
+                eprintln!("Audio stream error: {}", err);
+            },
+            None,
+        )
+        .with_context(|| format!("Failed to build audio stream on {}", device_name))?;
+
+    stream
+        .play()
+        .with_context(|| format!("Failed to start audio stream on {}", device_name))?;
+
+    Ok(stream)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,5 +226,53 @@ mod tests {
         // Should not panic or error, even if no devices are present
         let result = list_output_devices();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn voice_is_done_at_end() {
+        let samples = Arc::new(vec![0.0_f32; 100]);
+        let voice = Voice {
+            samples: Arc::clone(&samples),
+            position: 100,
+            gain: 1.0,
+        };
+        assert!(voice.is_done());
+    }
+
+    #[test]
+    fn voice_is_not_done_mid_playback() {
+        let samples = Arc::new(vec![0.0_f32; 100]);
+        let voice = Voice {
+            samples: Arc::clone(&samples),
+            position: 50,
+            gain: 1.0,
+        };
+        assert!(!voice.is_done());
+    }
+
+    #[test]
+    fn audio_command_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<AudioCommand>();
+    }
+
+    #[test]
+    fn audio_command_roundtrips_through_rtrb() {
+        let (mut producer, mut consumer) = rtrb::RingBuffer::new(4);
+        let samples = Arc::new(vec![1.0_f32, 2.0, 3.0]);
+        producer
+            .push(AudioCommand::Trigger {
+                samples: Arc::clone(&samples),
+                gain: 0.5,
+            })
+            .unwrap();
+
+        let cmd = consumer.pop().unwrap();
+        match cmd {
+            AudioCommand::Trigger { samples: s, gain } => {
+                assert_eq!(s.len(), 3);
+                assert!((gain - 0.5).abs() < f32::EPSILON);
+            }
+        }
     }
 }

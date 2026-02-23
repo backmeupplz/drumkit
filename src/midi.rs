@@ -217,6 +217,41 @@ pub struct TimestampedMessage {
     pub message: MidiMessage,
 }
 
+/// Connect to a MIDI input port with a raw callback.
+/// The caller controls what happens on each MIDI message — no allocation, no channels.
+/// Returns the connection handle (dropping it disconnects).
+pub fn connect_callback<F>(
+    port_index: usize,
+    callback: F,
+) -> Result<midir::MidiInputConnection<()>>
+where
+    F: FnMut(u64, &[u8]) + Send + 'static,
+{
+    let midi_in = MidiInput::new("drumkit-trigger")
+        .context("Failed to create MIDI input")?;
+
+    let ports = midi_in.ports();
+    let port = ports
+        .get(port_index)
+        .context(format!("MIDI port index {} not found", port_index))?;
+
+    let port_name = midi_in.port_name(port).unwrap_or_else(|_| "Unknown".to_string());
+
+    let mut callback = callback;
+    let connection = midi_in
+        .connect(
+            port,
+            "drumkit-in",
+            move |timestamp_us, data, _| {
+                callback(timestamp_us, data);
+            },
+            (),
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to connect to MIDI port {}: {}", port_name, e))?;
+
+    Ok(connection)
+}
+
 /// Connect to a MIDI input port and send parsed messages to the channel.
 /// Returns the connection handle (dropping it disconnects).
 pub fn connect(
