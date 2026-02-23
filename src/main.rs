@@ -328,6 +328,7 @@ fn cmd_test_trigger(file: PathBuf, note: u8, port: Option<usize>, device: Option
                 let _ = producer.push(audio::AudioCommand::Trigger {
                     samples: Arc::clone(&trigger_samples),
                     gain,
+                    note: target_note,
                 });
             }
         }
@@ -357,12 +358,27 @@ fn cmd_test_trigger(file: PathBuf, note: u8, port: Option<usize>, device: Option
     Ok(())
 }
 
+/// Directed hi-hat choke rules: when `note` is triggered, these notes get choked.
+/// Closing chokes open (hierarchical), but not vice versa.
+fn choke_targets(note: u8) -> &'static [u8] {
+    match note {
+        42 => &[46, 23, 21], // Closed HH chokes Open, Half-Open, Splash
+        44 => &[46, 23, 21], // Pedal HH chokes Open, Half-Open, Splash
+        23 => &[46],         // Half-Open chokes Open only
+        _ => &[],
+    }
+}
+
 fn cmd_play(kit_path: PathBuf, port: Option<usize>, device: Option<usize>) -> Result<()> {
     let device = resolve_audio_device(device)?;
     let loaded_kit = kit::load_kit(&kit_path)?;
 
-    // Set up rtrb ring buffer for MIDI→audio communication
-    let (mut producer, consumer) = rtrb::RingBuffer::new(64);
+    // Pre-compute fade durations in frames
+    let choke_fade = (loaded_kit.sample_rate as f64 * 0.068) as usize; // 68ms hi-hat choke
+    let aftertouch_fade = (loaded_kit.sample_rate as f64 * 0.085) as usize; // 85ms cymbal grab
+
+    // Set up rtrb ring buffer for MIDI→audio communication (128 to handle choke bursts)
+    let (mut producer, consumer) = rtrb::RingBuffer::new(128);
 
     // Start persistent audio output stream
     let _stream = audio::run_output_stream(device, consumer, loaded_kit.sample_rate, loaded_kit.channels)?;
@@ -398,15 +414,32 @@ fn cmd_play(kit_path: PathBuf, port: Option<usize>, device: Option<usize>) -> Re
 
             // Note-on with velocity > 0
             if status == 0x90 && velocity > 0 {
+                // Send choke commands for notes this trigger should silence
+                for &target in choke_targets(note) {
+                    let _ = producer.push(audio::AudioCommand::Choke {
+                        note: target,
+                        fade_frames: choke_fade,
+                    });
+                }
+
                 if let Some(group) = kit_notes.get(&note) {
                     if let Some(samples) = group.select(velocity) {
                         let gain = velocity as f32 / 127.0;
                         let _ = producer.push(audio::AudioCommand::Trigger {
                             samples: Arc::clone(samples),
                             gain,
+                            note,
                         });
                     }
                 }
+            }
+
+            // Polyphonic aftertouch (cymbal grab choke)
+            if status == 0xA0 && velocity == 127 {
+                let _ = producer.push(audio::AudioCommand::Choke {
+                    note,
+                    fade_frames: aftertouch_fade,
+                });
             }
         }
     })?;
