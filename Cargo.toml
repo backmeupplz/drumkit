@@ -16,6 +16,11 @@ midir = "0.10"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 anyhow = "1"
+cpal = "0.15"
+hound = "3.5"
+
+[dev-dependencies]
+tempfile = "3"
 
 [profile.release]
 opt-level = 3

@@ -1,10 +1,13 @@
+mod audio;
 mod midi;
+mod sample;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use crossterm::style::{self, Stylize};
 use std::io::{self, Write};
-use std::sync::mpsc;
+use std::path::PathBuf;
+use std::sync::{mpsc, Arc};
 
 #[derive(Parser)]
 #[command(name = "drumkit")]
@@ -24,6 +27,17 @@ enum Commands {
         /// MIDI port number from 'drumkit devices' (e.g. --port 1). Prompts if omitted.
         #[arg(short, long)]
         port: Option<usize>,
+    },
+    /// List available audio output devices
+    AudioDevices,
+    /// Play a WAV file through an audio output device
+    TestSound {
+        /// Path to a WAV file
+        #[arg(short, long)]
+        file: PathBuf,
+        /// Audio device index from 'drumkit audio-devices'. Uses default if omitted.
+        #[arg(short, long)]
+        device: Option<usize>,
     },
 }
 
@@ -154,11 +168,49 @@ fn cmd_monitor(port: Option<usize>) -> Result<()> {
     Ok(())
 }
 
+fn cmd_audio_devices() -> Result<()> {
+    let devices = audio::list_output_devices()?;
+
+    if devices.is_empty() {
+        println!("No audio output devices found.");
+        return Ok(());
+    }
+
+    println!("Audio output devices:");
+    println!();
+    for device in &devices {
+        println!("  [{}] {}", device.index, device.name);
+    }
+    println!();
+    println!("Use: drumkit test-sound --file <path> --device <number>");
+
+    Ok(())
+}
+
+fn cmd_test_sound(file: PathBuf, device: Option<usize>) -> Result<()> {
+    let data = sample::load_wav(&file)?;
+    println!(
+        "Loaded: {} ({} Hz, {} ch, {:.2}s)",
+        file.display(),
+        data.sample_rate,
+        data.channels,
+        data.samples.len() as f64 / (data.sample_rate as f64 * data.channels as f64),
+    );
+
+    let samples = Arc::new(data.samples);
+    audio::play_sample(device, samples, data.sample_rate, data.channels)?;
+
+    println!("Done.");
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Devices => cmd_devices(),
         Commands::Monitor { port } => cmd_monitor(port),
+        Commands::AudioDevices => cmd_audio_devices(),
+        Commands::TestSound { file, device } => cmd_test_sound(file, device),
     }
 }
