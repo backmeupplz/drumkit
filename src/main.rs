@@ -4,11 +4,15 @@ mod midi;
 mod sample;
 
 use anyhow::{Context, Result};
+use arc_swap::ArcSwap;
 use clap::{Parser, Subcommand};
 use crossterm::style::{self, Stylize};
+use notify::Watcher;
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
+use std::time::{Duration, Instant};
 
 #[derive(Parser)]
 #[command(name = "drumkit")]
@@ -369,6 +373,54 @@ fn choke_targets(note: u8) -> &'static [u8] {
     }
 }
 
+/// Reload the kit from disk and atomically swap into the shared ArcSwap.
+/// On failure, logs the error and keeps the old kit.
+fn reload_kit(
+    kit_path: &PathBuf,
+    expected_sample_rate: u32,
+    expected_channels: u16,
+    shared_notes: &Arc<ArcSwap<HashMap<u8, Arc<kit::NoteGroup>>>>,
+) {
+    match kit::load_kit(kit_path) {
+        Ok(new_kit) => {
+            if new_kit.sample_rate != expected_sample_rate {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "[reload] ERROR: sample rate mismatch (expected {} Hz, got {} Hz) — keeping old kit",
+                        expected_sample_rate, new_kit.sample_rate
+                    )
+                    .with(style::Color::Red)
+                );
+                return;
+            }
+            if new_kit.channels != expected_channels {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "[reload] ERROR: channel count mismatch (expected {}, got {}) — keeping old kit",
+                        expected_channels, new_kit.channels
+                    )
+                    .with(style::Color::Red)
+                );
+                return;
+            }
+            shared_notes.store(Arc::new(new_kit.notes));
+            println!(
+                "{}",
+                "[reload] Kit reloaded".with(style::Color::Green)
+            );
+        }
+        Err(e) => {
+            eprintln!(
+                "{}",
+                format!("[reload] ERROR: {} — keeping old kit", e)
+                    .with(style::Color::Red)
+            );
+        }
+    }
+}
+
 fn cmd_play(kit_path: PathBuf, port: Option<usize>, device: Option<usize>) -> Result<()> {
     let device = resolve_audio_device(device)?;
     let loaded_kit = kit::load_kit(&kit_path)?;
@@ -403,7 +455,9 @@ fn cmd_play(kit_path: PathBuf, port: Option<usize>, device: Option<usize>) -> Re
         None => select_port(&devices)?,
     };
 
-    let kit_notes = loaded_kit.notes.clone();
+    // Wrap kit notes in ArcSwap for lock-free hot-reload
+    let shared_notes = Arc::new(ArcSwap::from_pointee(loaded_kit.notes));
+    let midi_notes = Arc::clone(&shared_notes);
 
     // Connect MIDI with a raw callback — no allocation in the hot path
     let _connection = midi::connect_callback(port_index, move |_timestamp, data| {
@@ -422,6 +476,7 @@ fn cmd_play(kit_path: PathBuf, port: Option<usize>, device: Option<usize>) -> Re
                     });
                 }
 
+                let kit_notes = midi_notes.load();
                 if let Some(group) = kit_notes.get(&note) {
                     if let Some(samples) = group.select(velocity) {
                         let gain = velocity as f32 / 127.0;
@@ -444,6 +499,18 @@ fn cmd_play(kit_path: PathBuf, port: Option<usize>, device: Option<usize>) -> Re
         }
     })?;
 
+    // Set up filesystem watcher for hot-reload
+    let (watch_tx, watch_rx) = mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+        if let Ok(_event) = res {
+            let _ = watch_tx.send(());
+        }
+    })?;
+    watcher.watch(kit_path.as_ref(), notify::RecursiveMode::NonRecursive)?;
+
+    let stream_sample_rate = loaded_kit.sample_rate;
+    let stream_channels = loaded_kit.channels;
+
     println!();
     println!(
         "{}",
@@ -452,12 +519,48 @@ fn cmd_play(kit_path: PathBuf, port: Option<usize>, device: Option<usize>) -> Re
     );
     println!(
         "{}",
+        format!("Watching: {}", kit_path.display())
+            .with(style::Color::Yellow)
+    );
+    println!(
+        "{}",
         "Hit your pads! Press Ctrl+C to quit."
             .with(style::Color::DarkGrey)
     );
 
-    // Park the main thread until Ctrl+C
-    std::thread::park();
+    // Debounced file-watch loop (replaces thread::park)
+    let debounce = Duration::from_millis(500);
+    let mut last_event: Option<Instant> = None;
+
+    loop {
+        let timeout = match last_event {
+            Some(t) => {
+                let elapsed = t.elapsed();
+                if elapsed >= debounce {
+                    // Quiet period passed — reload now
+                    reload_kit(&kit_path, stream_sample_rate, stream_channels, &shared_notes);
+                    last_event = None;
+                    continue;
+                }
+                debounce - elapsed
+            }
+            None => Duration::from_secs(3600), // sleep until next event
+        };
+
+        match watch_rx.recv_timeout(timeout) {
+            Ok(()) => {
+                // Drain any extra events that arrived
+                while watch_rx.try_recv().is_ok() {}
+                last_event = Some(Instant::now());
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Debounce timer expired — handled at top of loop
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                break;
+            }
+        }
+    }
 
     Ok(())
 }
