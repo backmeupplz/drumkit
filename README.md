@@ -15,7 +15,9 @@ Connect your e-drums (Alesis Nitro Max, Roland, Yamaha, etc.) via USB and trigge
 - **Hot-reload** — edit samples while playing, changes load automatically with zero downtime
 - **On-the-fly kit switching** — press `k` to browse and switch kits instantly, no restart needed
 - **On-the-fly device switching** — press `a` to switch audio output devices and `m` to switch MIDI inputs without restarting
-- **Library directory management** — add extra sample library folders at launch with `--kits-dir` or on-the-fly by pressing `d` during play mode
+- **Note mappings** — built-in General MIDI and Alesis Nitro Max presets, per-kit `mapping.toml` support, user-created mappings, and live note renaming
+- **Library directory management** — browse, add, and remove extra kit and mapping directories on-the-fly (`d`), persisted across restarts
+- **Settings persistence** — selected kit, audio device, MIDI input, and extra directories are remembered between sessions
 - **Hi-hat choke groups** — closing the hi-hat pedal chokes open hi-hat samples with a natural fade-out
 - **Cymbal grab choke** — polyphonic aftertouch silences cymbals for realistic muting
 - **Live pad visualization** — TUI grid shows hits with velocity-mapped green flash intensity
@@ -80,12 +82,16 @@ drumkit play --kits-dir /path/to/samples --kits-dir /another/path
 
 | Key | Action |
 |-----|--------|
-| `k` | Switch kit |
-| `d` | Add library directory |
-| `a` | Switch audio output device |
-| `m` | Switch MIDI input |
-| `l` | View log (captured stderr) |
-| `q` | Quit |
+| `k` | **Kit picker** — browse and switch between discovered kits |
+| `n` | **Mapping picker** — switch note name mappings (General MIDI, Alesis, user-created, or kit-bundled) |
+| `r` | **Rename note** — rename the most recently hit pad (creates a user mapping if editing a built-in) |
+| `d` | **Directory manager** — browse kit and mapping directories, add new ones (`a`/`A`), or remove user-added ones (`Del`) |
+| `a` | **Audio device picker** — switch audio output device |
+| `m` | **MIDI input picker** — switch MIDI input port |
+| `l` | **Log viewer** — view captured stderr (ALSA/PipeWire noise) and kit summary |
+| `q` | **Quit** |
+
+All selections (kit, audio device, MIDI input) are saved to `~/.config/drumkit/settings.toml` and restored on next launch.
 
 ## Sample Library Structure
 
@@ -93,9 +99,9 @@ drumkit searches for kits in these directories:
 
 - `./kits/`
 - `$XDG_DATA_HOME/drumkit/kits/` (usually `~/.local/share/drumkit/kits/`)
-- Any directories added via `--kits-dir` or the `d` popup
+- Any directories added via `--kits-dir` or the `d` directory manager
 
-Each subdirectory containing WAV files is a kit:
+Each subdirectory containing audio files is a kit:
 
 ```
 ~/.local/share/drumkit/kits/
@@ -107,12 +113,15 @@ Each subdirectory containing WAV files is a kit:
 │   ├── 38_v2_rr2.wav       # Snare — hard, variation 2
 │   ├── 42.wav              # Closed hi-hat
 │   ├── 46.wav              # Open hi-hat
-│   └── 49.wav              # Crash
+│   ├── 49.wav              # Crash
+│   └── mapping.toml        # Optional kit-specific note names
 └── Electronic-Kit/
     └── ...
 ```
 
-Adding a new kit is instant — create a folder, drop in WAV files, and press `k` to see it. Editing samples while playing triggers an automatic hot-reload with zero downtime.
+Adding a new kit is instant — create a folder, drop in audio files, and press `k` to see it. Editing samples while playing triggers an automatic hot-reload with zero downtime.
+
+Supported audio formats: WAV, FLAC, OGG, MP3.
 
 ### Naming Convention
 
@@ -124,6 +133,36 @@ Adding a new kit is instant — create a folder, drop in WAV files, and press `k
 | `38_rr1.wav`, `38_rr2.wav` | Round-robin only (cycles through variations) |
 | `38_v1.wav`, `38_v2.wav` | Velocity layers only (v1=soft, v2=hard) |
 | `38_v1_rr1.wav` | Both velocity layers and round-robin |
+
+### Note Mappings
+
+Mappings give human-readable names to MIDI note numbers and define choke groups. drumkit resolves mappings in this order:
+
+1. **Kit-bundled** — if the kit folder contains a `mapping.toml`, it's loaded automatically when you switch to that kit
+2. **User-selected** — press `n` to pick from available mappings (built-in presets, user-created, kit-bundled)
+3. **Default** — General MIDI drum names
+
+Built-in presets: General MIDI, Alesis Nitro Max.
+
+**Creating a mapping:** press `r` after hitting a pad to rename it. If the current mapping is built-in, a user copy is created automatically. User mappings are saved to `$XDG_DATA_HOME/drumkit/mappings/` (usually `~/.local/share/drumkit/mappings/`).
+
+**Kit-bundled mapping:** add a `mapping.toml` to your kit folder:
+
+```toml
+name = "My Kit"
+
+[notes]
+36 = "Kick"
+38 = "Snare"
+42 = "Closed Hi-Hat"
+46 = "Open Hi-Hat"
+
+[chokes]
+42 = [46]    # closing hi-hat chokes the open hi-hat
+44 = [46]    # pedal hi-hat also chokes open hi-hat
+```
+
+**Extra mapping directories:** press `d` then `A` to add directories containing `.toml` mapping files. These are persisted in settings and appear in the `n` picker.
 
 ### Common MIDI Note Numbers (General MIDI / Alesis Nitro Max)
 
@@ -197,17 +236,20 @@ cargo test
 cargo build --release
 ```
 
-The codebase is a single Rust crate with five modules:
+The codebase is a single Rust crate:
 
 | Module | Purpose |
 |--------|---------|
 | `main.rs` | CLI parsing, resource wiring |
-| `tui.rs` | Terminal UI, popups, key handling |
+| `tui/` | Terminal UI, popups, key handling, rendering |
 | `audio.rs` | Audio output stream, voice mixing |
-| `midi.rs` | MIDI input, note/drum mapping |
+| `midi.rs` | MIDI input, callback routing |
 | `kit.rs` | Kit loading, velocity/round-robin grouping |
-| `setup.rs` | Interactive setup flow, kit discovery |
-| `sample.rs` | WAV decoding |
+| `mapping.rs` | Note name mappings, choke groups, TOML parsing |
+| `settings.rs` | Persisted user settings (kit, devices, directories) |
+| `setup.rs` | Interactive setup flow |
+| `sample.rs` | Multi-format audio decoding (WAV, FLAC, OGG, MP3) |
+| `stderr.rs` | Stderr capture for clean TUI |
 
 ## License
 

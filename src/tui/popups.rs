@@ -117,6 +117,10 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
                                 *guard = Some(new_producer);
                             }
                             state.set_status(format!("Audio: {}", new_device_name));
+                            // Persist selection
+                            let mut s = settings::load_settings();
+                            s.audio_device = Some(new_device_name);
+                            let _ = settings::save_settings(&s);
                         }
                         Err(e) => {
                             // Try to restore old device
@@ -182,6 +186,10 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
                             resources.midi_port_index = new_port_index;
                             state.midi_device = new_port_name.clone();
                             state.set_status(format!("MIDI: {}", new_port_name));
+                            // Persist selection
+                            let mut s = settings::load_settings();
+                            s.midi_device = Some(new_port_name);
+                            let _ = settings::save_settings(&s);
                         }
                         Err(e) => {
                             state.set_status(format!("MIDI switch failed: {}", e));

@@ -432,35 +432,100 @@ fn cmd_play(kit: Option<PathBuf>, port: Option<usize>, device: Option<usize>, ki
 }
 
 fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, kits_dirs: Vec<PathBuf>, extra_mapping_dirs: Vec<PathBuf>) -> Result<()> {
-    // Enter TUI immediately so the user sees a loading screen instead of a blank terminal
+    // Enter TUI immediately so the user sees a loading screen with progress
     let mut terminal = tui::init_terminal()?;
     let kit_name_display = kit_path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "kit".to_string());
-    terminal.draw(|frame| {
+
+    // Load kit on a background thread with progress tracking
+    let progress = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let total = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let load_path = kit_path.clone();
+    let prog = Arc::clone(&progress);
+    let tot = Arc::clone(&total);
+    let (load_tx, load_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = kit::load_kit_with_progress(&load_path, &prog, &tot);
+        let _ = load_tx.send(result);
+    });
+
+    // Draw progress bar while waiting
+    let loaded_kit = loop {
         use ratatui::{
             style::{Color, Modifier, Style},
             text::{Line, Span},
             widgets::{Block, BorderType, Borders, Paragraph},
         };
-        let area = frame.area();
-        let outer = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::DarkGray))
-            .title(" drumkit ")
-            .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
-        let inner = outer.inner(area);
-        frame.render_widget(outer, area);
-        let msg = Paragraph::new(Line::from(Span::styled(
-            format!("  Loading \"{}\"...", kit_name_display),
-            Style::default().fg(Color::DarkGray),
-        )));
-        frame.render_widget(msg, inner);
-    })?;
+        use std::sync::atomic::Ordering;
 
-    match cmd_play_direct_inner(terminal, kit_path, port_index, audio_device, kits_dirs, extra_mapping_dirs) {
+        let cur = progress.load(Ordering::Relaxed);
+        let tot = total.load(Ordering::Relaxed);
+
+        let kit_name = kit_name_display.clone();
+        terminal.draw(move |frame| {
+            let area = frame.area();
+            let outer = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::DarkGray))
+                .title(" drumkit ")
+                .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+            let inner = outer.inner(area);
+            frame.render_widget(outer, area);
+
+            if inner.height < 3 || inner.width < 10 {
+                return;
+            }
+
+            let progress_text = if tot == 0 {
+                format!("  Loading \"{}\"...", kit_name)
+            } else {
+                format!("  Loading \"{}\"... {}/{}", kit_name, cur, tot)
+            };
+
+            let bar_w = (inner.width as usize).saturating_sub(4);
+            let (filled, empty) = if tot == 0 || bar_w == 0 {
+                (0, bar_w)
+            } else {
+                let f = (cur * bar_w) / tot;
+                (f.min(bar_w), bar_w.saturating_sub(f))
+            };
+
+            let lines = vec![
+                Line::from(Span::styled(
+                    progress_text,
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        "\u{2588}".repeat(filled),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    Span::styled(
+                        "\u{2591}".repeat(empty),
+                        Style::default().fg(Color::Rgb(50, 50, 60)),
+                    ),
+                ]),
+            ];
+            frame.render_widget(Paragraph::new(lines), inner);
+        })?;
+
+        match load_rx.try_recv() {
+            Ok(result) => break result?,
+            Err(mpsc::TryRecvError::Empty) => {
+                std::thread::sleep(Duration::from_millis(33));
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                tui::restore_terminal();
+                anyhow::bail!("Kit loading thread panicked");
+            }
+        }
+    };
+
+    match cmd_play_direct_inner(terminal, kit_path, loaded_kit, port_index, audio_device, kits_dirs, extra_mapping_dirs) {
         Ok(()) => Ok(()),
         Err(e) => {
             tui::restore_terminal();
@@ -472,6 +537,7 @@ fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, ki
 fn cmd_play_direct_inner(
     terminal: tui::Term,
     kit_path: PathBuf,
+    loaded_kit: kit::Kit,
     port_index: usize,
     audio_device: usize,
     kits_dirs: Vec<PathBuf>,
@@ -479,8 +545,6 @@ fn cmd_play_direct_inner(
 ) -> Result<()> {
     // Start capturing stderr before any device enumeration (ALSA noise)
     let capture = stderr::StderrCapture::start();
-
-    let loaded_kit = kit::load_kit(&kit_path)?;
 
     // Load kit-specific mapping if available, otherwise General MIDI
     let initial_mapping = mapping::load_kit_mapping(&kit_path)
