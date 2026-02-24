@@ -4,6 +4,8 @@ Low-latency TUI MIDI drum sampler for electronic drum kits on Linux.
 
 Connect your e-drums (Alesis Nitro Max, Roland, Yamaha, etc.) via USB and trigger custom audio samples with sub-6ms latency. No DAW, no configuration files — just drop WAV files into a folder and play.
 
+![drumkit](screenshot.png)
+
 ## Features
 
 - **Sub-6ms latency** — lock-free audio pipeline with zero allocations on the audio thread, pre-decoded samples held in RAM, and a lock-free SPSC ring buffer between MIDI and audio threads
