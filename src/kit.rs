@@ -142,16 +142,17 @@ pub fn note_keys(notes: &HashMap<u8, Arc<NoteGroup>>) -> Vec<u8> {
     keys
 }
 
-/// Print a human-readable summary of a loaded kit to stdout.
-pub fn print_summary(kit: &Kit, mapping: &crate::mapping::NoteMapping) {
+/// Return kit loading summary as log lines (for the TUI log viewer).
+pub fn summary_lines(kit: &Kit, mapping: &crate::mapping::NoteMapping) -> Vec<String> {
     let keys = note_keys(&kit.notes);
-    println!(
+    let mut lines = Vec::with_capacity(keys.len() + 1);
+    lines.push(format!(
         "Kit \"{}\" loaded: {} notes, {} Hz, {} ch",
         kit.name,
         keys.len(),
         kit.sample_rate,
         kit.channels
-    );
+    ));
     for &n in &keys {
         let group = &kit.notes[&n];
         let variant_info = if group.max_velocity_layer > 1 || group.max_round_robin > 1 {
@@ -164,13 +165,14 @@ pub fn print_summary(kit: &Kit, mapping: &crate::mapping::NoteMapping) {
         } else {
             String::new()
         };
-        println!(
+        lines.push(format!(
             "  note {:>3} → {}{}",
             n,
             mapping.drum_name(n),
             variant_info
-        );
+        ));
     }
+    lines
 }
 
 /// Shared loading logic for `load_kit` and `load_kit_with_progress`.

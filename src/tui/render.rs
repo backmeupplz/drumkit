@@ -127,7 +127,15 @@ fn render_body(frame: &mut Frame, area: Rect, state: &AppState) {
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
             .split(area);
-        render_pad_grid(frame, chunks[0], state);
+
+        // Left pane: pad grid on top, shortcuts at bottom
+        let left_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(chunks[0]);
+        render_pad_grid(frame, left_chunks[0], state);
+        render_shortcuts(frame, left_chunks[1]);
+
         render_hit_log(frame, chunks[1], state);
     }
 }
@@ -192,13 +200,11 @@ fn render_pad_grid(frame: &mut Frame, area: Rect, state: &AppState) {
     let cols = ((area.width / min_pad_w) as usize).max(1);
     let pad_width = (area.width / cols as u16).min(max_pad_w);
 
-    // Grid dimensions
-    let total_rows = (state.pads.len() + cols - 1) / cols;
-    let grid_h = total_rows as u16 * pad_height;
+    // Grid width for horizontal centering
     let grid_w = cols as u16 * pad_width;
 
-    // Center the grid vertically and horizontally
-    let offset_y = area.y + (area.height.saturating_sub(grid_h)) / 2;
+    // Top-align vertically, center horizontally
+    let offset_y = area.y;
     let offset_x = area.x + (area.width.saturating_sub(grid_w)) / 2;
 
     for (i, pad) in state.pads.iter().enumerate() {
@@ -389,6 +395,16 @@ fn render_hit_log(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+fn render_shortcuts(frame: &mut Frame, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let hints = " l log  k kit  n mapping  r rename  d dirs  a audio  m midi  q quit";
+    let hint_style = Style::default().fg(Color::DarkGray);
+    let line = Line::from(Span::styled(hints, hint_style));
+    frame.render_widget(Paragraph::new(line), area);
+}
+
 fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -404,25 +420,7 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         _ => (String::new(), Style::default()),
     };
 
-    let hints = "l log  k kit  n mapping  r rename  d dirs  a audio  m midi  q quit ";
-    let hint_style = Style::default().fg(Color::DarkGray);
-
-    if w < hints.len() + 2 {
-        // Narrow: just show minimal hints
-        let line = Line::from(Span::styled("q quit ", hint_style));
-        frame.render_widget(Paragraph::new(line), area);
-        return;
-    }
-
-    let available_for_status = w.saturating_sub(hints.len());
-    // Truncate status to available space so it never overflows into hints
-    let truncated: String = status_text.chars().take(available_for_status).collect();
-    let padded_status = format!("{:<width$}", truncated, width = available_for_status);
-
-    let line = Line::from(vec![
-        Span::styled(padded_status, status_style),
-        Span::styled(hints, hint_style),
-    ]);
-
+    let truncated: String = status_text.chars().take(w).collect();
+    let line = Line::from(Span::styled(truncated, status_style));
     frame.render_widget(Paragraph::new(line), area);
 }

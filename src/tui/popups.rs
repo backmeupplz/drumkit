@@ -233,9 +233,9 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
                     let note_val = *note;
                     let name = input.clone();
 
-                    // Clone from built-in if current mapping is built-in
+                    // Clone to a user mapping if current is built-in or kit-bundled
                     let mut new_mapping = (*state.mapping).clone();
-                    if new_mapping.source == mapping::MappingSource::BuiltIn {
+                    if matches!(new_mapping.source, mapping::MappingSource::BuiltIn | mapping::MappingSource::KitFile(_)) {
                         new_mapping.name = format!("{} (Custom)", new_mapping.name);
                         new_mapping.source = mapping::MappingSource::UserFile(
                             PathBuf::from("unsaved"),

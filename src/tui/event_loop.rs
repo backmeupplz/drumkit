@@ -121,6 +121,11 @@ pub(super) fn event_loop(
                 TuiEvent::KitReloadError(msg) => {
                     state.set_status(format!("Reload error: {}", msg));
                 }
+                TuiEvent::MappingReloaded(new_mapping) => {
+                    let new_mapping = Arc::new(new_mapping);
+                    state.mapping = new_mapping;
+                    state.update_hit_log_names();
+                }
                 TuiEvent::KitLoadComplete { result, path, name } => {
                     // Only process if we're still showing the Loading popup for this kit
                     let is_loading = matches!(
@@ -187,11 +192,20 @@ pub(super) fn event_loop(
                             resources.shared_notes.store(Arc::new(new_kit.notes));
                             let _ = resources.watcher.unwatch(&resources.kit_path);
                             let _ = resources.watcher.watch(path.as_ref(), notify::RecursiveMode::NonRecursive);
-                            resources.kit_path = path;
+                            resources.kit_path = path.clone();
+
+                            // Auto-apply kit mapping if available, otherwise fall back to default
+                            let new_mapping = mapping::load_kit_mapping(&path)
+                                .unwrap_or_else(mapping::default_mapping);
+                            let new_mapping = Arc::new(new_mapping);
+                            resources.shared_mapping.store(Arc::clone(&new_mapping));
+                            state.mapping = new_mapping;
+
                             state.kit_name = name;
                             state.sample_rate = resources.sample_rate;
                             state.channels = resources.channels;
                             state.rebuild_pads(&note_keys);
+                            state.update_hit_log_names();
                             state.set_status("Kit loaded".to_string());
                         }
                         Err(e) => {

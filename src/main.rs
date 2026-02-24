@@ -396,11 +396,13 @@ fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, ki
 
     let loaded_kit = kit::load_kit(&kit_path)?;
 
-    // Load default mapping (General MIDI)
-    let shared_mapping = Arc::new(ArcSwap::from_pointee(mapping::default_mapping()));
+    // Load kit-specific mapping if available, otherwise General MIDI
+    let initial_mapping = mapping::load_kit_mapping(&kit_path)
+        .unwrap_or_else(mapping::default_mapping);
+    let shared_mapping = Arc::new(ArcSwap::from_pointee(initial_mapping));
 
-    // Print summary before entering TUI (visible in normal screen buffer)
-    kit::print_summary(&loaded_kit, &shared_mapping.load());
+    // Build kit summary for the TUI log viewer
+    let kit_summary = kit::summary_lines(&loaded_kit, &shared_mapping.load());
 
     // Pre-compute fade durations in frames
     let choke_fade = (loaded_kit.sample_rate as f64 * 0.068) as usize; // 68ms hi-hat choke
@@ -455,6 +457,7 @@ fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, ki
 
     // Spawn debounce thread for hot-reload
     let debounce_shared_notes = Arc::clone(&shared_notes);
+    let debounce_shared_mapping = Arc::clone(&shared_mapping);
     let debounce_kit_path = kit_path.clone();
     let debounce_tui_tx = tui_tx.clone();
     std::thread::spawn(move || {
@@ -486,6 +489,11 @@ fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, ki
                                 } else {
                                     let note_keys = kit::note_keys(&new_kit.notes);
                                     debounce_shared_notes.store(Arc::new(new_kit.notes));
+                                    // Reload kit mapping if mapping.toml changed
+                                    if let Some(new_mapping) = mapping::load_kit_mapping(&debounce_kit_path) {
+                                        debounce_shared_mapping.store(Arc::new(new_mapping.clone()));
+                                        let _ = debounce_tui_tx.send(tui::TuiEvent::MappingReloaded(new_mapping));
+                                    }
                                     let _ = debounce_tui_tx
                                         .send(tui::TuiEvent::KitReloaded { note_keys });
                                 }
@@ -514,8 +522,8 @@ fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, ki
         }
     });
 
-    // Drain initial stderr capture into log lines
-    let mut initial_log = Vec::new();
+    // Build initial log: kit summary + any captured stderr
+    let mut initial_log = kit_summary;
     if let Some(ref cap) = capture {
         cap.drain_into(&mut initial_log);
     }

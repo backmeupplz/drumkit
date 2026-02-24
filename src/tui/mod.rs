@@ -30,6 +30,7 @@ pub enum TuiEvent {
         path: PathBuf,
         name: String,
     },
+    MappingReloaded(mapping::NoteMapping),
 }
 
 /// Popup overlays in play mode.

@@ -275,6 +275,7 @@ fn render_mapping_popup(
                 let source_tag = match &m.source {
                     mapping::MappingSource::BuiltIn => " (built-in)",
                     mapping::MappingSource::UserFile(_) => " (user)",
+                    mapping::MappingSource::KitFile(_) => " (kit)",
                 };
                 let current = if m.name == state.mapping.name { " *" } else { "" };
                 ListItem::new(Line::from(vec![

@@ -1,13 +1,14 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Where a mapping was loaded from.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MappingSource {
     BuiltIn,
     UserFile(PathBuf),
+    KitFile(PathBuf),
 }
 
 /// Raw TOML schema — keys are strings because TOML only supports string keys.
@@ -132,6 +133,14 @@ fn fallback_mapping() -> NoteMapping {
 pub fn default_mapping() -> NoteMapping {
     let gm_toml = include_str!("../mappings/general-midi.toml");
     parse_mapping(gm_toml, MappingSource::BuiltIn).unwrap_or_else(|_| fallback_mapping())
+}
+
+/// Try to load a kit-specific mapping from `<kit_path>/mapping.toml`.
+/// Returns `None` if the file doesn't exist or fails to parse.
+pub fn load_kit_mapping(kit_path: &Path) -> Option<NoteMapping> {
+    let mapping_path = kit_path.join("mapping.toml");
+    let content = std::fs::read_to_string(&mapping_path).ok()?;
+    parse_mapping(&content, MappingSource::KitFile(mapping_path)).ok()
 }
 
 /// Return the built-in preset mappings compiled into the binary.
@@ -330,5 +339,25 @@ name = "Bad"
         let parsed = parse_mapping(&read_content, MappingSource::UserFile(path)).unwrap();
         assert_eq!(parsed.name, "My Custom Kit");
         assert_eq!(parsed.drum_name(36), "Kick");
+    }
+
+    #[test]
+    fn load_kit_mapping_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml_content = "name = \"Test Kit\"\n\n[notes]\n62 = \"Conga\"\n";
+        std::fs::write(dir.path().join("mapping.toml"), toml_content).unwrap();
+
+        let result = load_kit_mapping(dir.path());
+        assert!(result.is_some());
+        let m = result.unwrap();
+        assert_eq!(m.name, "Test Kit");
+        assert_eq!(m.drum_name(62), "Conga");
+        assert!(matches!(m.source, MappingSource::KitFile(_)));
+    }
+
+    #[test]
+    fn load_kit_mapping_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_kit_mapping(dir.path()).is_none());
     }
 }
