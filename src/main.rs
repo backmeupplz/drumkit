@@ -73,6 +73,9 @@ enum Commands {
         /// Audio device index from 'drumkit audio-devices'. Uses default if omitted.
         #[arg(short, long)]
         device: Option<usize>,
+        /// Extra directories to search for kits (can be repeated)
+        #[arg(long = "kits-dir", value_name = "DIR")]
+        kits_dirs: Vec<PathBuf>,
     },
 }
 
@@ -423,24 +426,24 @@ pub fn build_midi_callback(
     }
 }
 
-fn cmd_play(kit: Option<PathBuf>, port: Option<usize>, device: Option<usize>) -> Result<()> {
+fn cmd_play(kit: Option<PathBuf>, port: Option<usize>, device: Option<usize>, kits_dirs: Vec<PathBuf>) -> Result<()> {
     // If all three are provided, go straight to play
     if let (Some(kit_path), Some(port_idx), Some(dev_idx)) = (&kit, port, device) {
-        return cmd_play_direct(kit_path.clone(), port_idx, dev_idx);
+        return cmd_play_direct(kit_path.clone(), port_idx, dev_idx, kits_dirs);
     }
 
     // Run the interactive setup TUI for any missing values
-    match setup::run_setup(kit, device, port)? {
+    match setup::run_setup(kit, device, port, &kits_dirs)? {
         setup::SetupResult::Selected {
             kit_path,
             audio_device,
             midi_port,
-        } => cmd_play_direct(kit_path, midi_port, audio_device),
+        } => cmd_play_direct(kit_path, midi_port, audio_device, kits_dirs),
         setup::SetupResult::Cancelled => Ok(()),
     }
 }
 
-fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize) -> Result<()> {
+fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, kits_dirs: Vec<PathBuf>) -> Result<()> {
     // Start capturing stderr before any device enumeration (ALSA noise)
     let capture = setup::StderrCapture::start();
 
@@ -599,6 +602,7 @@ fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize) ->
         aftertouch_fade,
         watcher,
         stderr_capture: capture,
+        extra_kits_dirs: kits_dirs,
     };
 
     let result = tui::run(tui_rx, state, resources);
@@ -617,6 +621,6 @@ fn main() -> Result<()> {
         Commands::TestTrigger { file, note, port, device } => {
             cmd_test_trigger(file, note, port, device)
         }
-        Commands::Play { kit, port, device } => cmd_play(kit, port, device),
+        Commands::Play { kit, port, device, kits_dirs } => cmd_play(kit, port, device, kits_dirs),
     }
 }

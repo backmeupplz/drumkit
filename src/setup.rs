@@ -132,8 +132,19 @@ impl StderrCapture {
     }
 }
 
+/// Return the built-in search directories (for display purposes).
+pub fn default_search_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![PathBuf::from("./kits")];
+    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+        dirs.push(PathBuf::from(xdg).join("drumkit/kits"));
+    } else if let Ok(home) = std::env::var("HOME") {
+        dirs.push(PathBuf::from(home).join(".local/share/drumkit/kits"));
+    }
+    dirs
+}
+
 /// Scan standard locations for kit directories containing .wav files.
-pub fn discover_kits() -> Vec<DiscoveredKit> {
+pub fn discover_kits(extra_dirs: &[PathBuf]) -> Vec<DiscoveredKit> {
     let mut kits = Vec::new();
     let mut seen_paths = std::collections::HashSet::new();
 
@@ -145,6 +156,9 @@ pub fn discover_kits() -> Vec<DiscoveredKit> {
     } else if let Ok(home) = std::env::var("HOME") {
         search_dirs.push(PathBuf::from(home).join(".local/share/drumkit/kits"));
     }
+
+    // Append user-supplied extra directories
+    search_dirs.extend_from_slice(extra_dirs);
 
     for search_dir in &search_dirs {
         let entries = match std::fs::read_dir(search_dir) {
@@ -207,6 +221,7 @@ pub fn run_setup(
     preset_kit: Option<PathBuf>,
     preset_audio: Option<usize>,
     preset_midi: Option<usize>,
+    extra_kits_dirs: &[PathBuf],
 ) -> Result<SetupResult> {
     // If everything is preset, skip the TUI entirely
     if let (Some(kit_path), Some(audio_device), Some(midi_port)) =
@@ -222,7 +237,7 @@ pub fn run_setup(
     // Start capturing stderr before device enumeration
     let capture = StderrCapture::start();
 
-    let kits = discover_kits();
+    let kits = discover_kits(extra_kits_dirs);
     let audio_devices = audio::list_output_devices()?;
     let midi_devices = midi::list_devices()?;
 

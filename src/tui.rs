@@ -35,6 +35,7 @@ pub enum Popup {
     KitPicker { kits: Vec<setup::DiscoveredKit>, list_state: ListState },
     AudioPicker { devices: Vec<audio::AudioDevice>, list_state: ListState },
     MidiPicker { devices: Vec<midi::MidiDevice>, list_state: ListState },
+    LibraryDir { input: String, cursor: usize, error: Option<String> },
 }
 
 /// Swappable resources owned by the TUI event loop during play mode.
@@ -53,6 +54,7 @@ pub struct PlayResources {
     pub aftertouch_fade: usize,
     pub watcher: notify::RecommendedWatcher,
     pub stderr_capture: Option<setup::StderrCapture>,
+    pub extra_kits_dirs: Vec<PathBuf>,
 }
 
 /// Visual state for a single pad in the grid.
@@ -210,7 +212,8 @@ fn event_loop(
             cap.drain_into(&mut state.log_lines);
         }
 
-        terminal.draw(|frame| ui(frame, state))?;
+        let extra_dirs = &resources.extra_kits_dirs;
+        terminal.draw(|frame| ui(frame, state, extra_dirs))?;
 
         if state.should_quit {
             return Ok(());
@@ -238,12 +241,19 @@ fn event_loop(
                         state.popup = Some(Popup::Log { scroll });
                     }
                     KeyCode::Char('k') => {
-                        let kits = setup::discover_kits();
+                        let kits = setup::discover_kits(&resources.extra_kits_dirs);
                         let mut list_state = ListState::default();
                         if !kits.is_empty() {
                             list_state.select(Some(0));
                         }
                         state.popup = Some(Popup::KitPicker { kits, list_state });
+                    }
+                    KeyCode::Char('d') => {
+                        state.popup = Some(Popup::LibraryDir {
+                            input: String::new(),
+                            cursor: 0,
+                            error: None,
+                        });
                     }
                     KeyCode::Char('a') => {
                         if let Ok(devices) = audio::list_output_devices() {
@@ -482,10 +492,53 @@ fn handle_popup_key(state: &mut AppState, resources: &mut PlayResources, key: Ke
             }
             _ => {}
         },
+        Popup::LibraryDir { input, cursor, error } => match key {
+            KeyCode::Esc => { state.popup = None; }
+            KeyCode::Char('q') if input.is_empty() => { state.popup = None; state.should_quit = true; }
+            KeyCode::Enter => {
+                let path = PathBuf::from(input.as_str());
+                if path.is_dir() {
+                    resources.extra_kits_dirs.push(path);
+                    state.set_status("Directory added".to_string());
+                    state.popup = None;
+                } else {
+                    *error = Some(format!("Not a directory: {}", input));
+                }
+            }
+            KeyCode::Char(c) => {
+                input.insert(*cursor, c);
+                *cursor += 1;
+                *error = None;
+            }
+            KeyCode::Backspace => {
+                if *cursor > 0 {
+                    *cursor -= 1;
+                    input.remove(*cursor);
+                    *error = None;
+                }
+            }
+            KeyCode::Delete => {
+                if *cursor < input.len() {
+                    input.remove(*cursor);
+                    *error = None;
+                }
+            }
+            KeyCode::Left => {
+                *cursor = cursor.saturating_sub(1);
+            }
+            KeyCode::Right => {
+                if *cursor < input.len() {
+                    *cursor += 1;
+                }
+            }
+            KeyCode::Home => { *cursor = 0; }
+            KeyCode::End => { *cursor = input.len(); }
+            _ => {}
+        },
     }
 }
 
-fn ui(frame: &mut Frame, state: &AppState) {
+fn ui(frame: &mut Frame, state: &AppState, extra_dirs: &[PathBuf]) {
     let area = frame.area();
 
     if area.height < 3 || area.width < 15 {
@@ -512,7 +565,7 @@ fn ui(frame: &mut Frame, state: &AppState) {
 
     // Popup overlay
     if let Some(ref popup) = state.popup {
-        render_popup(frame, area, popup, state);
+        render_popup(frame, area, popup, state, extra_dirs);
     }
 }
 
@@ -879,7 +932,7 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         _ => (String::new(), Style::default()),
     };
 
-    let hints = "l log  k kit  a audio  m midi  q quit ";
+    let hints = "l log  k kit  d dirs  a audio  m midi  q quit ";
     let hint_style = Style::default().fg(Color::DarkGray);
 
     if w < hints.len() + 2 {
@@ -910,12 +963,13 @@ fn popup_area(area: Rect) -> Rect {
     Rect::new(x, y, popup_w, popup_h)
 }
 
-fn render_popup(frame: &mut Frame, area: Rect, popup: &Popup, state: &AppState) {
+fn render_popup(frame: &mut Frame, area: Rect, popup: &Popup, state: &AppState, extra_dirs: &[PathBuf]) {
     match popup {
         Popup::Log { scroll } => render_log_popup(frame, area, state, *scroll),
         Popup::KitPicker { kits, list_state } => render_kit_popup(frame, area, kits, list_state),
         Popup::AudioPicker { devices, list_state } => render_audio_popup(frame, area, devices, list_state),
         Popup::MidiPicker { devices, list_state } => render_midi_popup(frame, area, devices, list_state),
+        Popup::LibraryDir { input, cursor, error } => render_library_dir_popup(frame, area, input, *cursor, error.as_deref(), extra_dirs),
     }
 }
 
@@ -1115,6 +1169,128 @@ fn render_midi_popup(frame: &mut Frame, area: Rect, devices: &[midi::MidiDevice]
 
     let footer = Paragraph::new(Line::from(Span::styled(
         " \u{2191}\u{2193} navigate  Enter select  Esc/m close  q quit",
+        Style::default().fg(Color::DarkGray),
+    )));
+    frame.render_widget(footer, footer_area);
+}
+
+fn render_library_dir_popup(
+    frame: &mut Frame,
+    area: Rect,
+    input: &str,
+    cursor: usize,
+    error: Option<&str>,
+    extra_dirs: &[PathBuf],
+) {
+    let popup = popup_area(area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title(" Library Directories ")
+        .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    if inner.height < 4 || inner.width < 10 {
+        return;
+    }
+
+    // Reserve lines: footer(1) + input(1) + error(1 if present) + separator(1)
+    let error_lines: u16 = if error.is_some() { 1 } else { 0 };
+    let bottom_reserved = 1 + 1 + error_lines + 1; // footer + input + error + separator
+    let dir_list_height = inner.height.saturating_sub(bottom_reserved);
+
+    let dir_list_area = Rect::new(inner.x, inner.y, inner.width, dir_list_height);
+    let separator_area = Rect::new(inner.x, inner.y + dir_list_height, inner.width, 1);
+    let input_area = Rect::new(inner.x, inner.y + dir_list_height + 1, inner.width, 1);
+    let error_area = if error.is_some() {
+        Rect::new(inner.x, inner.y + dir_list_height + 2, inner.width, 1)
+    } else {
+        Rect::default()
+    };
+    let footer_area = Rect::new(
+        inner.x,
+        inner.y + inner.height.saturating_sub(1),
+        inner.width,
+        1,
+    );
+
+    // Show current search directories
+    let builtin = setup::default_search_dirs();
+    let mut dir_lines: Vec<Line> = Vec::new();
+    dir_lines.push(Line::from(Span::styled(
+        " Search directories:",
+        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+    )));
+    for d in &builtin {
+        dir_lines.push(Line::from(Span::styled(
+            format!("   {}", d.display()),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    for d in extra_dirs {
+        dir_lines.push(Line::from(Span::styled(
+            format!("   {}", d.display()),
+            Style::default().fg(Color::Green),
+        )));
+    }
+
+    let dir_paragraph = Paragraph::new(dir_lines).wrap(Wrap { trim: false });
+    frame.render_widget(dir_paragraph, dir_list_area);
+
+    // Separator
+    let sep = Paragraph::new(Line::from(Span::styled(
+        " Add directory:",
+        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+    )));
+    frame.render_widget(sep, separator_area);
+
+    // Input line with visible cursor
+    let w = inner.width as usize;
+    let display_input = if input.len() + 3 > w {
+        // Scroll input so cursor is visible
+        let start = cursor.saturating_sub(w.saturating_sub(4));
+        &input[start..]
+    } else {
+        input
+    };
+    let cursor_in_display = cursor.min(display_input.len());
+
+    let before = &display_input[..cursor_in_display];
+    let cursor_char = display_input.get(cursor_in_display..cursor_in_display + 1).unwrap_or(" ");
+    let after = if cursor_in_display + 1 <= display_input.len() {
+        &display_input[cursor_in_display + 1..]
+    } else {
+        ""
+    };
+
+    let input_line = Line::from(vec![
+        Span::styled(" > ", Style::default().fg(Color::Yellow)),
+        Span::raw(before),
+        Span::styled(
+            cursor_char,
+            Style::default().fg(Color::Black).bg(Color::White),
+        ),
+        Span::raw(after),
+    ]);
+    frame.render_widget(Paragraph::new(input_line), input_area);
+
+    // Error line
+    if let Some(err) = error {
+        let err_line = Paragraph::new(Line::from(Span::styled(
+            format!(" {}", err),
+            Style::default().fg(Color::Red),
+        )));
+        frame.render_widget(err_line, error_area);
+    }
+
+    // Footer
+    let footer = Paragraph::new(Line::from(Span::styled(
+        " Enter add  Esc cancel",
         Style::default().fg(Color::DarkGray),
     )));
     frame.render_widget(footer, footer_area);
