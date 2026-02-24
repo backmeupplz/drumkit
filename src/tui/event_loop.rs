@@ -7,7 +7,7 @@ use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use super::{popups, render, AppState, PlayResources, Popup, TuiEvent};
-use crate::{audio, kit, mapping, midi};
+use crate::{audio, kit, mapping, midi, settings};
 
 pub(super) fn event_loop(
     terminal: &mut Terminal<ratatui::backend::CrosstermBackend<io::Stdout>>,
@@ -21,8 +21,9 @@ pub(super) fn event_loop(
             cap.drain_into(&mut state.log_lines);
         }
 
-        let extra_dirs = &resources.extra_kits_dirs;
-        terminal.draw(|frame| render::ui(frame, state, extra_dirs))?;
+        let extra_kit_dirs = &resources.extra_kits_dirs;
+        let extra_mapping_dirs = &resources.extra_mapping_dirs;
+        terminal.draw(|frame| render::ui(frame, state, extra_kit_dirs, extra_mapping_dirs))?;
 
         if state.should_quit {
             return Ok(());
@@ -59,6 +60,8 @@ pub(super) fn event_loop(
                     }
                     KeyCode::Char('d') => {
                         state.popup = Some(Popup::LibraryDir {
+                            mode: super::DirPopupMode::Browse,
+                            selected: 0,
                             input: String::new(),
                             cursor: 0,
                             error: None,
@@ -86,7 +89,7 @@ pub(super) fn event_loop(
                         }
                     }
                     KeyCode::Char('n') => {
-                        let mappings = mapping::discover_all_mappings();
+                        let mappings = mapping::discover_all_mappings(&resources.extra_mapping_dirs);
                         let mut list_state = ListState::default();
                         if !mappings.is_empty() {
                             // Pre-select current mapping
@@ -190,9 +193,13 @@ pub(super) fn event_loop(
 
                             let note_keys = kit::note_keys(&new_kit.notes);
                             resources.shared_notes.store(Arc::new(new_kit.notes));
+
+                            // Suppress spurious reload from watcher.watch()
+                            resources.suppress_reload.store(true, std::sync::atomic::Ordering::Relaxed);
                             let _ = resources.watcher.unwatch(&resources.kit_path);
                             let _ = resources.watcher.watch(path.as_ref(), notify::RecursiveMode::NonRecursive);
                             resources.kit_path = path.clone();
+                            resources.shared_kit_path.store(Arc::new(path.clone()));
 
                             // Auto-apply kit mapping if available, otherwise fall back to default
                             let new_mapping = mapping::load_kit_mapping(&path)
@@ -207,6 +214,11 @@ pub(super) fn event_loop(
                             state.rebuild_pads(&note_keys);
                             state.update_hit_log_names();
                             state.set_status("Kit loaded".to_string());
+
+                            // Persist selected kit to settings
+                            let mut s = settings::load_settings();
+                            s.kit_path = Some(path);
+                            let _ = settings::save_settings(&s);
                         }
                         Err(e) => {
                             state.set_status(format!("Kit load error: {}", e));

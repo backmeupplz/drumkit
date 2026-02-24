@@ -112,6 +112,14 @@ fn fallback_mapping() -> NoteMapping {
         (51, "Ride"), (52, "Chinese Cymbal"), (53, "Ride Bell"),
         (54, "Tambourine"), (55, "Splash Cymbal"), (56, "Cowbell"),
         (57, "Crash 2"), (58, "Vibraslap"), (59, "Ride 2"),
+        (60, "Hi Bongo"), (61, "Low Bongo"), (62, "Mute Hi Conga"),
+        (63, "Open Hi Conga"), (64, "Low Conga"), (65, "High Timbale"),
+        (66, "Low Timbale"), (67, "High Agogo"), (68, "Low Agogo"),
+        (69, "Cabasa"), (70, "Maracas"), (71, "Short Whistle"),
+        (72, "Long Whistle"), (73, "Short Guiro"), (74, "Long Guiro"),
+        (75, "Claves"), (76, "Hi Wood Block"), (77, "Low Wood Block"),
+        (78, "Mute Cuica"), (79, "Open Cuica"), (80, "Mute Triangle"),
+        (81, "Open Triangle"),
     ].into_iter().map(|(n, s)| (n, s.to_string())).collect();
 
     let chokes: HashMap<u8, Vec<u8>> = [
@@ -169,21 +177,24 @@ pub fn user_mappings_dir() -> PathBuf {
     base.join("drumkit/mappings")
 }
 
-/// Discover user mapping files from the XDG data directory.
-pub fn discover_user_mappings() -> Vec<NoteMapping> {
-    let dir = user_mappings_dir();
-    if !dir.is_dir() {
-        return Vec::new();
-    }
+/// Discover user mapping files from the XDG data directory and any extra directories.
+pub fn discover_user_mappings(extra_dirs: &[PathBuf]) -> Vec<NoteMapping> {
+    let mut dirs_to_scan = vec![user_mappings_dir()];
+    dirs_to_scan.extend(extra_dirs.iter().cloned());
 
     let mut mappings = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "toml") {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Ok(m) = parse_mapping(&content, MappingSource::UserFile(path)) {
-                        mappings.push(m);
+    for dir in &dirs_to_scan {
+        if !dir.is_dir() {
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "toml") {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if let Ok(m) = parse_mapping(&content, MappingSource::UserFile(path)) {
+                            mappings.push(m);
+                        }
                     }
                 }
             }
@@ -194,9 +205,9 @@ pub fn discover_user_mappings() -> Vec<NoteMapping> {
 }
 
 /// Return all available mappings: built-in presets followed by user mappings.
-pub fn discover_all_mappings() -> Vec<NoteMapping> {
+pub fn discover_all_mappings(extra_dirs: &[PathBuf]) -> Vec<NoteMapping> {
     let mut all = builtin_mappings();
-    all.extend(discover_user_mappings());
+    all.extend(discover_user_mappings(extra_dirs));
     all
 }
 

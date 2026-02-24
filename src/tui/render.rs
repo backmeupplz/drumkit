@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use super::{render_popups, AppState, PadState, FLASH_DURATION_MS};
 
-pub(super) fn ui(frame: &mut Frame, state: &AppState, extra_dirs: &[PathBuf]) {
+pub(super) fn ui(frame: &mut Frame, state: &AppState, extra_kit_dirs: &[PathBuf], extra_mapping_dirs: &[PathBuf]) {
     let area = frame.area();
 
     if area.height < 3 || area.width < 15 {
@@ -37,7 +37,7 @@ pub(super) fn ui(frame: &mut Frame, state: &AppState, extra_dirs: &[PathBuf]) {
 
     // Popup overlay
     if let Some(ref popup) = state.popup {
-        render_popups::render_popup(frame, area, popup, state, extra_dirs);
+        render_popups::render_popup(frame, area, popup, state, extra_kit_dirs, extra_mapping_dirs);
     }
 }
 

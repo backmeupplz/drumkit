@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-use super::{AppState, PlayResources, Popup, TuiEvent};
-use crate::{audio, kit, mapping, midi};
+use super::{AppState, DirPopupMode, PlayResources, Popup, TuiEvent};
+use crate::{audio, kit, mapping, midi, settings};
 
 pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResources, key: KeyCode) {
     let popup = state.popup.as_mut().unwrap();
@@ -245,7 +245,7 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
                     state.set_status(format!("Failed to delete: {}", deleted_name));
                 }
                 // Re-open the mapping picker with refreshed list
-                let mappings = mapping::discover_all_mappings();
+                let mappings = mapping::discover_all_mappings(&resources.extra_mapping_dirs);
                 let mut list_state = ListState::default();
                 if !mappings.is_empty() {
                     let sel = mappings.iter().position(|m| m.name == state.mapping.name).unwrap_or(0);
@@ -255,7 +255,7 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
             }
             _ => {
                 // Any other key cancels — go back to picker
-                let mappings = mapping::discover_all_mappings();
+                let mappings = mapping::discover_all_mappings(&resources.extra_mapping_dirs);
                 let mut list_state = ListState::default();
                 if !mappings.is_empty() {
                     let sel = mappings.iter().position(|m| m.name == state.mapping.name).unwrap_or(0);
@@ -320,48 +320,186 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
             KeyCode::End => { *cursor = input.len(); }
             _ => {}
         },
-        Popup::LibraryDir { input, cursor, error } => match key {
-            KeyCode::Esc => { state.popup = None; }
-            KeyCode::Char('q') if input.is_empty() => { state.popup = None; state.should_quit = true; }
-            KeyCode::Enter => {
-                let path = PathBuf::from(input.as_str());
-                if path.is_dir() {
-                    resources.extra_kits_dirs.push(path);
-                    state.set_status("Directory added".to_string());
-                    state.popup = None;
+        Popup::LibraryDir { .. } => {
+            handle_library_dir_key(state, resources, key);
+        }
+    }
+}
+
+/// Save the current extra kit/mapping dirs to settings.
+fn save_dir_settings(resources: &PlayResources) {
+    let mut s = settings::load_settings();
+    s.extra_kit_dirs = resources.extra_kits_dirs.clone();
+    s.extra_mapping_dirs = resources.extra_mapping_dirs.clone();
+    let _ = settings::save_settings(&s);
+}
+
+fn handle_library_dir_key(state: &mut AppState, resources: &mut PlayResources, key: KeyCode) {
+    // Extract current mode to avoid borrow conflicts with state.popup
+    let is_browse = matches!(
+        &state.popup,
+        Some(Popup::LibraryDir { mode: DirPopupMode::Browse, .. })
+    );
+
+    if is_browse {
+        match key {
+            KeyCode::Esc | KeyCode::Char('d') => { state.popup = None; }
+            KeyCode::Char('q') => { state.popup = None; state.should_quit = true; }
+            KeyCode::Char('a') => {
+                if let Some(Popup::LibraryDir { mode, input, cursor, error, .. }) = &mut state.popup {
+                    *mode = DirPopupMode::AddKit;
+                    input.clear();
+                    *cursor = 0;
+                    *error = None;
+                }
+            }
+            KeyCode::Char('A') => {
+                if let Some(Popup::LibraryDir { mode, input, cursor, error, .. }) = &mut state.popup {
+                    *mode = DirPopupMode::AddMapping;
+                    input.clear();
+                    *cursor = 0;
+                    *error = None;
+                }
+            }
+            KeyCode::Up => {
+                let count = resources.extra_kits_dirs.len() + resources.extra_mapping_dirs.len();
+                if count > 0 {
+                    if let Some(Popup::LibraryDir { selected, .. }) = &mut state.popup {
+                        *selected = if *selected == 0 { count - 1 } else { *selected - 1 };
+                    }
+                }
+            }
+            KeyCode::Down => {
+                let count = resources.extra_kits_dirs.len() + resources.extra_mapping_dirs.len();
+                if count > 0 {
+                    if let Some(Popup::LibraryDir { selected, .. }) = &mut state.popup {
+                        *selected = if *selected >= count - 1 { 0 } else { *selected + 1 };
+                    }
+                }
+            }
+            KeyCode::Delete | KeyCode::Backspace => {
+                // Read the selected index first
+                let sel = if let Some(Popup::LibraryDir { selected, .. }) = &state.popup {
+                    *selected
                 } else {
-                    *error = Some(format!("Not a directory: {}", input));
+                    return;
+                };
+                let kit_count = resources.extra_kits_dirs.len();
+                let total = kit_count + resources.extra_mapping_dirs.len();
+                if total > 0 && sel < total {
+                    let status_msg = if sel < kit_count {
+                        let removed = resources.extra_kits_dirs.remove(sel);
+                        format!("Removed kit dir: {}", removed.display())
+                    } else {
+                        let mapping_idx = sel - kit_count;
+                        let removed = resources.extra_mapping_dirs.remove(mapping_idx);
+                        format!("Removed mapping dir: {}", removed.display())
+                    };
+                    save_dir_settings(resources);
+                    state.set_status(status_msg);
+                    // Adjust selection
+                    let new_total = resources.extra_kits_dirs.len() + resources.extra_mapping_dirs.len();
+                    if let Some(Popup::LibraryDir { selected, .. }) = &mut state.popup {
+                        if new_total == 0 {
+                            *selected = 0;
+                        } else if *selected >= new_total {
+                            *selected = new_total - 1;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    } else {
+        // Add mode
+        match key {
+            KeyCode::Esc => {
+                if let Some(Popup::LibraryDir { mode, input, cursor, error, .. }) = &mut state.popup {
+                    *mode = DirPopupMode::Browse;
+                    input.clear();
+                    *cursor = 0;
+                    *error = None;
+                }
+            }
+            KeyCode::Enter => {
+                // Read input and mode
+                let (path_str, is_add_kit) = if let Some(Popup::LibraryDir { mode, input, .. }) = &state.popup {
+                    (input.clone(), matches!(mode, DirPopupMode::AddKit))
+                } else {
+                    return;
+                };
+                let path = PathBuf::from(&path_str);
+                if path.is_dir() {
+                    let status_msg = if is_add_kit {
+                        if !resources.extra_kits_dirs.contains(&path) {
+                            resources.extra_kits_dirs.push(path.clone());
+                        }
+                        format!("Added kit dir: {}", path.display())
+                    } else {
+                        if !resources.extra_mapping_dirs.contains(&path) {
+                            resources.extra_mapping_dirs.push(path.clone());
+                        }
+                        format!("Added mapping dir: {}", path.display())
+                    };
+                    save_dir_settings(resources);
+                    state.set_status(status_msg);
+                    if let Some(Popup::LibraryDir { mode, input, cursor, error, .. }) = &mut state.popup {
+                        *mode = DirPopupMode::Browse;
+                        input.clear();
+                        *cursor = 0;
+                        *error = None;
+                    }
+                } else {
+                    if let Some(Popup::LibraryDir { error, .. }) = &mut state.popup {
+                        *error = Some(format!("Not a directory: {}", path_str));
+                    }
                 }
             }
             KeyCode::Char(c) => {
-                input.insert(*cursor, c);
-                *cursor += 1;
-                *error = None;
+                if let Some(Popup::LibraryDir { input, cursor, error, .. }) = &mut state.popup {
+                    input.insert(*cursor, c);
+                    *cursor += 1;
+                    *error = None;
+                }
             }
             KeyCode::Backspace => {
-                if *cursor > 0 {
-                    *cursor -= 1;
-                    input.remove(*cursor);
-                    *error = None;
+                if let Some(Popup::LibraryDir { input, cursor, error, .. }) = &mut state.popup {
+                    if *cursor > 0 {
+                        *cursor -= 1;
+                        input.remove(*cursor);
+                        *error = None;
+                    }
                 }
             }
             KeyCode::Delete => {
-                if *cursor < input.len() {
-                    input.remove(*cursor);
-                    *error = None;
+                if let Some(Popup::LibraryDir { input, cursor, error, .. }) = &mut state.popup {
+                    if *cursor < input.len() {
+                        input.remove(*cursor);
+                        *error = None;
+                    }
                 }
             }
             KeyCode::Left => {
-                *cursor = cursor.saturating_sub(1);
-            }
-            KeyCode::Right => {
-                if *cursor < input.len() {
-                    *cursor += 1;
+                if let Some(Popup::LibraryDir { cursor, .. }) = &mut state.popup {
+                    *cursor = cursor.saturating_sub(1);
                 }
             }
-            KeyCode::Home => { *cursor = 0; }
-            KeyCode::End => { *cursor = input.len(); }
+            KeyCode::Right => {
+                if let Some(Popup::LibraryDir { input, cursor, .. }) = &mut state.popup {
+                    if *cursor < input.len() { *cursor += 1; }
+                }
+            }
+            KeyCode::Home => {
+                if let Some(Popup::LibraryDir { cursor, .. }) = &mut state.popup {
+                    *cursor = 0;
+                }
+            }
+            KeyCode::End => {
+                if let Some(Popup::LibraryDir { input, cursor, .. }) = &mut state.popup {
+                    *cursor = input.len();
+                }
+            }
             _ => {}
-        },
+        }
     }
 }

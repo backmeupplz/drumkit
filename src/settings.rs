@@ -2,12 +2,16 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Persisted user settings (last-used kit, audio device, MIDI device).
+/// Persisted user settings (last-used kit, audio device, MIDI device, extra directories).
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Settings {
     pub kit_path: Option<PathBuf>,
     pub audio_device: Option<String>,
     pub midi_device: Option<String>,
+    #[serde(default)]
+    pub extra_kit_dirs: Vec<PathBuf>,
+    #[serde(default)]
+    pub extra_mapping_dirs: Vec<PathBuf>,
 }
 
 /// Return the path to the settings file:
@@ -67,6 +71,8 @@ mod tests {
             kit_path: Some(PathBuf::from("/home/user/kits/linndrum")),
             audio_device: Some("HDA Intel PCH".to_string()),
             midi_device: Some("Alesis Nitro Max MIDI 1".to_string()),
+            extra_kit_dirs: vec![PathBuf::from("/extra/kits")],
+            extra_mapping_dirs: vec![PathBuf::from("/extra/mappings")],
         };
 
         // Save manually to temp path

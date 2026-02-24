@@ -375,6 +375,16 @@ fn cmd_test_trigger(file: PathBuf, note: u8, port: Option<usize>, device: Option
 }
 
 fn cmd_play(kit: Option<PathBuf>, port: Option<usize>, device: Option<usize>, kits_dirs: Vec<PathBuf>) -> Result<()> {
+    // Load persisted settings and merge extra directories from settings + CLI
+    let saved = settings::load_settings();
+    let mut all_kit_dirs = saved.extra_kit_dirs.clone();
+    for d in &kits_dirs {
+        if !all_kit_dirs.contains(d) {
+            all_kit_dirs.push(d.clone());
+        }
+    }
+    let extra_mapping_dirs = saved.extra_mapping_dirs.clone();
+
     // If all three are provided, go straight to play
     if let (Some(kit_path), Some(port_idx), Some(dev_idx)) = (&kit, port, device) {
         // Save explicit CLI choices so they're remembered next time
@@ -392,12 +402,14 @@ fn cmd_play(kit: Option<PathBuf>, port: Option<usize>, device: Option<usize>, ki
             kit_path: Some(kit_path.clone()),
             audio_device: audio_name,
             midi_device: midi_name,
+            extra_kit_dirs: all_kit_dirs.clone(),
+            extra_mapping_dirs: extra_mapping_dirs.clone(),
         });
-        return cmd_play_direct(kit_path.clone(), port_idx, dev_idx, kits_dirs);
+        return cmd_play_direct(kit_path.clone(), port_idx, dev_idx, all_kit_dirs, extra_mapping_dirs);
     }
 
     // Run the interactive setup TUI for any missing values
-    match setup::run_setup(kit, device, port, &kits_dirs)? {
+    match setup::run_setup(kit, device, port, &all_kit_dirs)? {
         setup::SetupResult::Selected {
             kit_path,
             audio_device,
@@ -410,14 +422,16 @@ fn cmd_play(kit: Option<PathBuf>, port: Option<usize>, device: Option<usize>, ki
                 kit_path: Some(kit_path.clone()),
                 audio_device: Some(audio_device_name),
                 midi_device: Some(midi_device_name),
+                extra_kit_dirs: all_kit_dirs.clone(),
+                extra_mapping_dirs: extra_mapping_dirs.clone(),
             });
-            cmd_play_direct(kit_path, midi_port, audio_device, kits_dirs)
+            cmd_play_direct(kit_path, midi_port, audio_device, all_kit_dirs, extra_mapping_dirs)
         }
         setup::SetupResult::Cancelled => Ok(()),
     }
 }
 
-fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, kits_dirs: Vec<PathBuf>) -> Result<()> {
+fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, kits_dirs: Vec<PathBuf>, extra_mapping_dirs: Vec<PathBuf>) -> Result<()> {
     // Enter TUI immediately so the user sees a loading screen instead of a blank terminal
     let mut terminal = tui::init_terminal()?;
     let kit_name_display = kit_path
@@ -446,7 +460,7 @@ fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, ki
         frame.render_widget(msg, inner);
     })?;
 
-    match cmd_play_direct_inner(terminal, kit_path, port_index, audio_device, kits_dirs) {
+    match cmd_play_direct_inner(terminal, kit_path, port_index, audio_device, kits_dirs, extra_mapping_dirs) {
         Ok(()) => Ok(()),
         Err(e) => {
             tui::restore_terminal();
@@ -461,6 +475,7 @@ fn cmd_play_direct_inner(
     port_index: usize,
     audio_device: usize,
     kits_dirs: Vec<PathBuf>,
+    extra_mapping_dirs: Vec<PathBuf>,
 ) -> Result<()> {
     // Start capturing stderr before any device enumeration (ALSA noise)
     let capture = stderr::StderrCapture::start();
@@ -526,10 +541,16 @@ fn cmd_play_direct_inner(
     let stream_sample_rate = loaded_kit.sample_rate;
     let stream_channels = loaded_kit.channels;
 
+    // Shared kit path so the debounce thread always reads the current kit
+    let shared_kit_path = Arc::new(ArcSwap::from_pointee(kit_path.clone()));
+    // Flag to suppress spurious reloads after kit switch
+    let suppress_reload = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     // Spawn debounce thread for hot-reload
     let debounce_shared_notes = Arc::clone(&shared_notes);
     let debounce_shared_mapping = Arc::clone(&shared_mapping);
-    let debounce_kit_path = kit_path.clone();
+    let debounce_kit_path = Arc::clone(&shared_kit_path);
+    let debounce_suppress = Arc::clone(&suppress_reload);
     let debounce_tui_tx = tui_tx.clone();
     std::thread::spawn(move || {
         let debounce = Duration::from_millis(500);
@@ -540,8 +561,14 @@ fn cmd_play_direct_inner(
                 Some(t) => {
                     let elapsed = t.elapsed();
                     if elapsed >= debounce {
+                        // Check suppress flag (set during kit switch to avoid spurious reload)
+                        if debounce_suppress.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                            last_event = None;
+                            continue;
+                        }
                         // Quiet period passed — reload now
-                        match kit::load_kit(&debounce_kit_path) {
+                        let current_path = debounce_kit_path.load();
+                        match kit::load_kit(&current_path) {
                             Ok(new_kit) => {
                                 if new_kit.sample_rate != stream_sample_rate {
                                     let _ = debounce_tui_tx.send(tui::TuiEvent::KitReloadError(
@@ -561,7 +588,7 @@ fn cmd_play_direct_inner(
                                     let note_keys = kit::note_keys(&new_kit.notes);
                                     debounce_shared_notes.store(Arc::new(new_kit.notes));
                                     // Reload kit mapping if mapping.toml changed
-                                    if let Some(new_mapping) = mapping::load_kit_mapping(&debounce_kit_path) {
+                                    if let Some(new_mapping) = mapping::load_kit_mapping(&current_path) {
                                         debounce_shared_mapping.store(Arc::new(new_mapping.clone()));
                                         let _ = debounce_tui_tx.send(tui::TuiEvent::MappingReloaded(new_mapping));
                                     }
@@ -625,6 +652,8 @@ fn cmd_play_direct_inner(
         producer: shared_producer,
         shared_notes,
         kit_path,
+        shared_kit_path,
+        suppress_reload,
         sample_rate: stream_sample_rate,
         channels: stream_channels,
         audio_device_index: audio_device,
@@ -635,6 +664,7 @@ fn cmd_play_direct_inner(
         watcher,
         stderr_capture: capture,
         extra_kits_dirs: kits_dirs,
+        extra_mapping_dirs,
         shared_mapping,
     };
 

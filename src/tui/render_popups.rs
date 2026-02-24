@@ -9,16 +9,16 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use super::{AppState, Popup};
+use super::{AppState, DirPopupMode, Popup};
 use crate::{audio, kit, mapping, midi};
 
-pub(super) fn render_popup(frame: &mut Frame, area: Rect, popup: &Popup, state: &AppState, extra_dirs: &[PathBuf]) {
+pub(super) fn render_popup(frame: &mut Frame, area: Rect, popup: &Popup, state: &AppState, extra_kit_dirs: &[PathBuf], extra_mapping_dirs: &[PathBuf]) {
     match popup {
         Popup::Log { scroll } => render_log_popup(frame, area, state, *scroll),
         Popup::KitPicker { kits, list_state } => render_kit_popup(frame, area, kits, list_state),
         Popup::AudioPicker { devices, list_state } => render_audio_popup(frame, area, devices, list_state),
         Popup::MidiPicker { devices, list_state } => render_midi_popup(frame, area, devices, list_state),
-        Popup::LibraryDir { input, cursor, error } => render_library_dir_popup(frame, area, input, *cursor, error.as_deref(), extra_dirs),
+        Popup::LibraryDir { mode, selected, input, cursor, error } => render_library_dir_popup(frame, area, mode, *selected, input, *cursor, error.as_deref(), extra_kit_dirs, extra_mapping_dirs),
         Popup::Loading { kit_name, progress, total } => render_loading_popup(frame, area, kit_name, progress, total),
         Popup::MappingPicker { mappings, list_state } => render_mapping_popup(frame, area, mappings, list_state, state),
         Popup::DeleteMapping { name, .. } => render_delete_mapping_popup(frame, area, name),
@@ -523,19 +523,28 @@ fn render_loading_popup(
 fn render_library_dir_popup(
     frame: &mut Frame,
     area: Rect,
+    mode: &DirPopupMode,
+    selected: usize,
     input: &str,
     cursor: usize,
     error: Option<&str>,
-    extra_dirs: &[PathBuf],
+    extra_kit_dirs: &[PathBuf],
+    extra_mapping_dirs: &[PathBuf],
 ) {
     let popup = popup_area(area);
     frame.render_widget(Clear, popup);
+
+    let title = match mode {
+        DirPopupMode::Browse => " Library Directories ",
+        DirPopupMode::AddKit => " Add Kit Directory ",
+        DirPopupMode::AddMapping => " Add Mapping Directory ",
+    };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Yellow))
-        .title(" Library Directories ")
+        .title(title)
         .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
 
     let inner = block.inner(popup);
@@ -545,68 +554,117 @@ fn render_library_dir_popup(
         return;
     }
 
-    // Reserve lines: footer(1) + input(1) + error(1 if present) + separator(1)
-    let error_lines: u16 = if error.is_some() { 1 } else { 0 };
-    let bottom_reserved = 1 + 1 + error_lines + 1; // footer + input + error + separator
-    let dir_list_height = inner.height.saturating_sub(bottom_reserved);
+    match mode {
+        DirPopupMode::Browse => {
+            render_browse_mode(frame, inner, selected, extra_kit_dirs, extra_mapping_dirs);
+        }
+        DirPopupMode::AddKit | DirPopupMode::AddMapping => {
+            render_add_mode(frame, inner, input, cursor, error);
+        }
+    }
+}
 
-    let dir_list_area = Rect::new(inner.x, inner.y, inner.width, dir_list_height);
-    let separator_area = Rect::new(inner.x, inner.y + dir_list_height, inner.width, 1);
-    let input_area = Rect::new(inner.x, inner.y + dir_list_height + 1, inner.width, 1);
-    let error_area = if error.is_some() {
-        Rect::new(inner.x, inner.y + dir_list_height + 2, inner.width, 1)
-    } else {
-        Rect::default()
-    };
-    let footer_area = Rect::new(
-        inner.x,
-        inner.y + inner.height.saturating_sub(1),
-        inner.width,
-        1,
-    );
+fn render_browse_mode(
+    frame: &mut Frame,
+    inner: Rect,
+    selected: usize,
+    extra_kit_dirs: &[PathBuf],
+    extra_mapping_dirs: &[PathBuf],
+) {
+    let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
+    let content_area = Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1));
 
-    // Show current search directories
-    let builtin = kit::default_search_dirs();
-    let mut dir_lines: Vec<Line> = Vec::new();
-    dir_lines.push(Line::from(Span::styled(
+    let builtin_kit = kit::default_search_dirs();
+    let builtin_mapping_dir = mapping::user_mappings_dir();
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Kit directories section
+    lines.push(Line::from(Span::styled(
         " Kit directories:",
         Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
     )));
-    for d in &builtin {
-        dir_lines.push(Line::from(Span::styled(
+    for d in &builtin_kit {
+        lines.push(Line::from(Span::styled(
             format!("   {}", d.display()),
             Style::default().fg(Color::DarkGray),
         )));
     }
-    for d in extra_dirs {
-        dir_lines.push(Line::from(Span::styled(
-            format!("   {}", d.display()),
-            Style::default().fg(Color::Green),
+
+    // User-added kit dirs (selectable)
+    let mut user_idx = 0;
+    for d in extra_kit_dirs {
+        let is_selected = user_idx == selected;
+        let prefix = if is_selected { " \u{25b8} " } else { "   " };
+        let style = if is_selected {
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Green)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{}{}", prefix, d.display()),
+            style,
         )));
+        user_idx += 1;
     }
-    dir_lines.push(Line::from(Span::styled(
-        " Mappings directory:",
+
+    lines.push(Line::from(""));
+
+    // Mapping directories section
+    lines.push(Line::from(Span::styled(
+        " Mapping directories:",
         Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
     )));
-    dir_lines.push(Line::from(Span::styled(
-        format!("   {}", mapping::user_mappings_dir().display()),
+    lines.push(Line::from(Span::styled(
+        format!("   {}", builtin_mapping_dir.display()),
         Style::default().fg(Color::DarkGray),
     )));
 
-    let dir_paragraph = Paragraph::new(dir_lines).wrap(Wrap { trim: false });
-    frame.render_widget(dir_paragraph, dir_list_area);
+    // User-added mapping dirs (selectable, continuing from kit user_idx)
+    for d in extra_mapping_dirs {
+        let is_selected = user_idx == selected;
+        let prefix = if is_selected { " \u{25b8} " } else { "   " };
+        let style = if is_selected {
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Green)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{}{}", prefix, d.display()),
+            style,
+        )));
+        user_idx += 1;
+    }
 
-    // Separator
-    let sep = Paragraph::new(Line::from(Span::styled(
-        " Add directory:",
-        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, content_area);
+
+    let footer = Paragraph::new(Line::from(Span::styled(
+        " a add kit dir  A add mapping dir  Del remove  Esc close  q quit",
+        Style::default().fg(Color::DarkGray),
     )));
-    frame.render_widget(sep, separator_area);
+    frame.render_widget(footer, footer_area);
+}
+
+fn render_add_mode(
+    frame: &mut Frame,
+    inner: Rect,
+    input: &str,
+    cursor: usize,
+    error: Option<&str>,
+) {
+    // Label
+    let label = Paragraph::new(Line::from(Span::styled(
+        " Enter directory path:",
+        Style::default().fg(Color::White),
+    )));
+    let label_area = Rect::new(inner.x, inner.y, inner.width, 1);
+    frame.render_widget(label, label_area);
 
     // Input line with visible cursor
+    let input_area = Rect::new(inner.x, inner.y + 1, inner.width, 1);
     let w = inner.width as usize;
     let display_input = if input.len() + 3 > w {
-        // Scroll input so cursor is visible
         let start = cursor.saturating_sub(w.saturating_sub(4));
         &input[start..]
     } else {
@@ -635,16 +693,18 @@ fn render_library_dir_popup(
 
     // Error line
     if let Some(err) = error {
+        let err_area = Rect::new(inner.x, inner.y + 2, inner.width, 1);
         let err_line = Paragraph::new(Line::from(Span::styled(
             format!(" {}", err),
             Style::default().fg(Color::Red),
         )));
-        frame.render_widget(err_line, error_area);
+        frame.render_widget(err_line, err_area);
     }
 
     // Footer
+    let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
     let footer = Paragraph::new(Line::from(Span::styled(
-        " Enter add  Esc cancel",
+        " Enter add  Esc back",
         Style::default().fg(Color::DarkGray),
     )));
     frame.render_widget(footer, footer_area);

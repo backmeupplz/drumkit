@@ -13,7 +13,7 @@ use ratatui::{widgets::ListState, Terminal};
 use std::collections::HashMap;
 use std::io::stdout;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 
@@ -33,13 +33,26 @@ pub enum TuiEvent {
     MappingReloaded(mapping::NoteMapping),
 }
 
+/// Mode for the library directory popup.
+pub enum DirPopupMode {
+    Browse,
+    AddKit,
+    AddMapping,
+}
+
 /// Popup overlays in play mode.
 pub enum Popup {
     Log { scroll: usize },
     KitPicker { kits: Vec<kit::DiscoveredKit>, list_state: ListState },
     AudioPicker { devices: Vec<audio::AudioDevice>, list_state: ListState },
     MidiPicker { devices: Vec<midi::MidiDevice>, list_state: ListState },
-    LibraryDir { input: String, cursor: usize, error: Option<String> },
+    LibraryDir {
+        mode: DirPopupMode,
+        selected: usize,
+        input: String,
+        cursor: usize,
+        error: Option<String>,
+    },
     Loading {
         kit_name: String,
         progress: Arc<AtomicUsize>,
@@ -57,6 +70,8 @@ pub struct PlayResources {
     pub producer: Arc<Mutex<Option<rtrb::Producer<audio::AudioCommand>>>>,
     pub shared_notes: Arc<ArcSwap<HashMap<u8, Arc<kit::NoteGroup>>>>,
     pub kit_path: PathBuf,
+    pub shared_kit_path: Arc<ArcSwap<PathBuf>>,
+    pub suppress_reload: Arc<AtomicBool>,
     pub sample_rate: u32,
     pub channels: u16,
     pub audio_device_index: usize,
@@ -67,6 +82,7 @@ pub struct PlayResources {
     pub watcher: notify::RecommendedWatcher,
     pub stderr_capture: Option<stderr::StderrCapture>,
     pub extra_kits_dirs: Vec<PathBuf>,
+    pub extra_mapping_dirs: Vec<PathBuf>,
     pub shared_mapping: Arc<ArcSwap<mapping::NoteMapping>>,
 }
 
