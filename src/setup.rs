@@ -18,6 +18,7 @@ use std::time::Duration;
 use crate::audio;
 use crate::kit;
 use crate::midi;
+use crate::settings;
 use crate::stderr::StderrCapture;
 
 /// Which step of the setup flow we're on.
@@ -33,7 +34,9 @@ pub enum SetupResult {
     Selected {
         kit_path: PathBuf,
         audio_device: usize,
+        audio_device_name: String,
         midi_port: usize,
+        midi_device_name: String,
     },
     Cancelled,
 }
@@ -55,6 +58,65 @@ struct SetupState {
     log_lines: Vec<String>,
     show_log: bool,
     log_scroll: usize,
+    saved: settings::Settings,
+}
+
+/// Try to resolve all missing presets from saved settings without entering the TUI.
+/// Returns `Some(SetupResult::Selected)` if every slot can be filled, `None` otherwise.
+fn try_autofill(
+    saved: &settings::Settings,
+    preset_kit: &Option<PathBuf>,
+    preset_audio: Option<usize>,
+    preset_midi: Option<usize>,
+    _extra_kits_dirs: &[PathBuf],
+) -> Option<SetupResult> {
+    // Resolve kit path
+    let kit_path = if let Some(p) = preset_kit {
+        p.clone()
+    } else {
+        let saved_path = saved.kit_path.as_ref()?;
+        // Verify the saved kit still exists on disk
+        if !saved_path.is_dir() {
+            return None;
+        }
+        saved_path.clone()
+    };
+
+    // Capture stderr during device enumeration to suppress ALSA noise
+    let capture = StderrCapture::start();
+
+    // Resolve audio device
+    let (audio_device, audio_device_name) = if let Some(idx) = preset_audio {
+        (idx, format!("Device {}", idx))
+    } else {
+        let saved_name = saved.audio_device.as_ref()?;
+        let devices = audio::list_output_devices().ok()?;
+        let dev = devices.iter().find(|d| d.name == *saved_name)?;
+        (dev.index, dev.name.clone())
+    };
+
+    // Resolve MIDI port
+    let (midi_port, midi_device_name) = if let Some(idx) = preset_midi {
+        (idx, format!("MIDI port {}", idx))
+    } else {
+        let saved_name = saved.midi_device.as_ref()?;
+        let devices = midi::list_devices().ok()?;
+        let dev = devices.iter().find(|d| d.name == *saved_name)?;
+        (dev.port_index, dev.name.clone())
+    };
+
+    // Restore stderr now that enumeration is done
+    if let Some(cap) = capture {
+        cap.restore();
+    }
+
+    Some(SetupResult::Selected {
+        kit_path,
+        audio_device,
+        audio_device_name,
+        midi_port,
+        midi_device_name,
+    })
 }
 
 /// Run the interactive setup TUI.
@@ -73,9 +135,48 @@ pub fn run_setup(
         return Ok(SetupResult::Selected {
             kit_path: kit_path.clone(),
             audio_device,
+            audio_device_name: format!("Device {}", audio_device),
             midi_port,
+            midi_device_name: format!("MIDI port {}", midi_port),
         });
     }
+
+    // Load saved settings — may allow skipping the TUI entirely
+    let saved = settings::load_settings();
+
+    // If saved settings can fill in every missing preset, skip the TUI
+    // We still need to discover devices to resolve names → indices, but we
+    // do it without entering the TUI at all.
+    if preset_kit.is_none() || preset_audio.is_none() || preset_midi.is_none() {
+        let can_autofill = try_autofill(
+            &saved,
+            &preset_kit,
+            preset_audio,
+            preset_midi,
+            extra_kits_dirs,
+        );
+        if let Some(result) = can_autofill {
+            return Ok(result);
+        }
+    }
+
+    // Set up terminal early so we can show a loading screen
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let _ = stdout().execute(LeaveAlternateScreen);
+        let _ = disable_raw_mode();
+        original_hook(panic_info);
+    }));
+
+    enable_raw_mode()?;
+    stdout().execute(EnterAlternateScreen)?;
+
+    let backend = ratatui::backend::CrosstermBackend::new(stdout());
+    let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
+
+    // Show loading screen while discovering kits and enumerating devices
+    terminal.draw(render_loading)?;
 
     // Start capturing stderr before device enumeration
     let capture = StderrCapture::start();
@@ -95,15 +196,36 @@ pub fn run_setup(
 
     let mut kit_list_state = ListState::default();
     if !kits.is_empty() {
-        kit_list_state.select(Some(0));
+        let default_idx = if preset_kit.is_none() {
+            saved.kit_path.as_ref().and_then(|saved_path| {
+                kits.iter().position(|k| k.path == *saved_path)
+            })
+        } else {
+            None
+        };
+        kit_list_state.select(Some(default_idx.unwrap_or(0)));
     }
     let mut audio_list_state = ListState::default();
     if !audio_devices.is_empty() {
-        audio_list_state.select(Some(0));
+        let default_idx = if preset_audio.is_none() {
+            saved.audio_device.as_ref().and_then(|saved_name| {
+                audio_devices.iter().position(|d| d.name == *saved_name)
+            })
+        } else {
+            None
+        };
+        audio_list_state.select(Some(default_idx.unwrap_or(0)));
     }
     let mut midi_list_state = ListState::default();
     if !midi_devices.is_empty() {
-        midi_list_state.select(Some(0));
+        let default_idx = if preset_midi.is_none() {
+            saved.midi_device.as_ref().and_then(|saved_name| {
+                midi_devices.iter().position(|d| d.name == *saved_name)
+            })
+        } else {
+            None
+        };
+        midi_list_state.select(Some(default_idx.unwrap_or(0)));
     }
 
     let selected_kit = preset_kit.map(|p| {
@@ -144,22 +266,8 @@ pub fn run_setup(
         log_lines,
         show_log: false,
         log_scroll: 0,
+        saved,
     };
-
-    // Set up terminal
-    let original_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info| {
-        let _ = stdout().execute(LeaveAlternateScreen);
-        let _ = disable_raw_mode();
-        original_hook(panic_info);
-    }));
-
-    enable_raw_mode()?;
-    stdout().execute(EnterAlternateScreen)?;
-
-    let backend = ratatui::backend::CrosstermBackend::new(stdout());
-    let mut terminal = Terminal::new(backend)?;
-    terminal.clear()?;
 
     let result = setup_event_loop(&mut terminal, &mut state, &capture, preset_audio, preset_midi);
 
@@ -195,15 +303,21 @@ fn setup_event_loop(
 
         if state.done {
             let kit_path = state.selected_kit.as_ref().unwrap().1.clone();
-            let audio_device = state.selected_audio.as_ref().unwrap().1;
+            let (audio_device_name, audio_device) = {
+                let a = state.selected_audio.as_ref().unwrap();
+                (a.0.clone(), a.1)
+            };
             let midi_port = state
                 .midi_list_state
                 .selected()
                 .expect("MIDI port must be selected");
+            let midi_device_name = state.midi_devices[midi_port].name.clone();
             return Ok(SetupResult::Selected {
                 kit_path,
                 audio_device,
+                audio_device_name,
                 midi_port,
+                midi_device_name,
             });
         }
 
@@ -272,6 +386,36 @@ fn setup_event_loop(
     }
 }
 
+/// After rescanning audio devices, select the saved device or fall back to index 0.
+fn rescan_audio(state: &mut SetupState) {
+    if let Ok(devices) = audio::list_output_devices() {
+        state.audio_devices = devices;
+        if !state.audio_devices.is_empty() {
+            let idx = state.saved.audio_device.as_ref().and_then(|name| {
+                state.audio_devices.iter().position(|d| d.name == *name)
+            });
+            state.audio_list_state.select(Some(idx.unwrap_or(0)));
+        } else {
+            state.audio_list_state.select(None);
+        }
+    }
+}
+
+/// After rescanning MIDI devices, select the saved device or fall back to index 0.
+fn rescan_midi(state: &mut SetupState) {
+    if let Ok(devices) = midi::list_devices() {
+        state.midi_devices = devices;
+        if !state.midi_devices.is_empty() {
+            let idx = state.saved.midi_device.as_ref().and_then(|name| {
+                state.midi_devices.iter().position(|d| d.name == *name)
+            });
+            state.midi_list_state.select(Some(idx.unwrap_or(0)));
+        } else {
+            state.midi_list_state.select(None);
+        }
+    }
+}
+
 fn handle_back(state: &mut SetupState) {
     match state.step {
         SetupStep::Kit => {
@@ -289,15 +433,7 @@ fn handle_back(state: &mut SetupState) {
         SetupStep::MidiPort => {
             state.step = SetupStep::AudioDevice;
             state.selected_audio = None;
-            // Rescan audio devices
-            if let Ok(devices) = audio::list_output_devices() {
-                state.audio_devices = devices;
-                if !state.audio_devices.is_empty() {
-                    state.audio_list_state.select(Some(0));
-                } else {
-                    state.audio_list_state.select(None);
-                }
-            }
+            rescan_audio(state);
         }
     }
 }
@@ -325,27 +461,11 @@ fn handle_enter(state: &mut SetupState, preset_audio: Option<usize>, preset_midi
                     if preset_midi.is_some() {
                         state.done = true;
                     } else {
-                        // Rescan MIDI devices
-                        if let Ok(devices) = midi::list_devices() {
-                            state.midi_devices = devices;
-                            if !state.midi_devices.is_empty() {
-                                state.midi_list_state.select(Some(0));
-                            } else {
-                                state.midi_list_state.select(None);
-                            }
-                        }
+                        rescan_midi(state);
                         state.step = SetupStep::MidiPort;
                     }
                 } else {
-                    // Rescan audio devices at step transition
-                    if let Ok(devices) = audio::list_output_devices() {
-                        state.audio_devices = devices;
-                        if !state.audio_devices.is_empty() {
-                            state.audio_list_state.select(Some(0));
-                        } else {
-                            state.audio_list_state.select(None);
-                        }
-                    }
+                    rescan_audio(state);
                     state.step = SetupStep::AudioDevice;
                 }
             }
@@ -361,15 +481,7 @@ fn handle_enter(state: &mut SetupState, preset_audio: Option<usize>, preset_midi
                 if preset_midi.is_some() {
                     state.done = true;
                 } else {
-                    // Rescan MIDI devices at step transition
-                    if let Ok(devices) = midi::list_devices() {
-                        state.midi_devices = devices;
-                        if !state.midi_devices.is_empty() {
-                            state.midi_list_state.select(Some(0));
-                        } else {
-                            state.midi_list_state.select(None);
-                        }
-                    }
+                    rescan_midi(state);
                     state.step = SetupStep::MidiPort;
                 }
             }
@@ -411,6 +523,30 @@ fn move_selection(state: &mut SetupState, delta: i32) {
         }
     };
     list_state.select(Some(next));
+}
+
+fn render_loading(frame: &mut Frame) {
+    let area = frame.area();
+
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(" drumkit setup ")
+        .title_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
+
+    let inner = outer.inner(area);
+    frame.render_widget(outer, area);
+
+    let msg = Paragraph::new(Line::from(Span::styled(
+        "  Discovering kits and devices...",
+        Style::default().fg(Color::DarkGray),
+    )));
+    frame.render_widget(msg, inner);
 }
 
 fn setup_ui(frame: &mut Frame, state: &SetupState) {

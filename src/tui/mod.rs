@@ -46,6 +46,7 @@ pub enum Popup {
         total: Arc<AtomicUsize>,
     },
     MappingPicker { mappings: Vec<mapping::NoteMapping>, list_state: ListState },
+    DeleteMapping { name: String, path: PathBuf, },
     NoteRename { note: u8, input: String, cursor: usize },
 }
 
@@ -195,8 +196,11 @@ impl AppState {
     }
 }
 
-/// Enter alternate screen, run the event loop, and restore terminal on exit.
-pub fn run(event_rx: mpsc::Receiver<TuiEvent>, mut state: AppState, mut resources: PlayResources) -> Result<()> {
+/// The terminal type used by the TUI.
+pub type Term = Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>;
+
+/// Enter alternate screen and return the terminal. Call `restore_terminal` when done.
+pub fn init_terminal() -> Result<Term> {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = stdout().execute(LeaveAlternateScreen);
@@ -210,11 +214,25 @@ pub fn run(event_rx: mpsc::Receiver<TuiEvent>, mut state: AppState, mut resource
     let backend = ratatui::backend::CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
+    Ok(terminal)
+}
 
+/// Restore the terminal to normal mode.
+pub fn restore_terminal() {
+    let _ = disable_raw_mode();
+    let _ = stdout().execute(LeaveAlternateScreen);
+}
+
+/// Run the event loop on an already-initialized terminal. Restores terminal on exit.
+pub fn run(
+    mut terminal: Term,
+    event_rx: mpsc::Receiver<TuiEvent>,
+    mut state: AppState,
+    mut resources: PlayResources,
+) -> Result<()> {
     let result = event_loop::event_loop(&mut terminal, &event_rx, &mut state, &mut resources);
 
-    disable_raw_mode()?;
-    stdout().execute(LeaveAlternateScreen)?;
+    restore_terminal();
 
     // Restore stderr
     if let Some(cap) = resources.stderr_capture.take() {

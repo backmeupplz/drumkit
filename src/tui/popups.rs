@@ -1,4 +1,5 @@
 use crossterm::event::KeyCode;
+use ratatui::widgets::ListState;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -223,7 +224,45 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
                     state.popup = None;
                 }
             }
+            KeyCode::Char('d') | KeyCode::Delete => {
+                if mappings.is_empty() { return; }
+                if let Some(idx) = list_state.selected() {
+                    if let mapping::MappingSource::UserFile(path) = &mappings[idx].source {
+                        let name = mappings[idx].name.clone();
+                        let path = path.clone();
+                        state.popup = Some(Popup::DeleteMapping { name, path });
+                    }
+                }
+            }
             _ => {}
+        },
+        Popup::DeleteMapping { name, path } => match key {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                let deleted_name = name.clone();
+                if std::fs::remove_file(&path).is_ok() {
+                    state.set_status(format!("Deleted mapping: {}", deleted_name));
+                } else {
+                    state.set_status(format!("Failed to delete: {}", deleted_name));
+                }
+                // Re-open the mapping picker with refreshed list
+                let mappings = mapping::discover_all_mappings();
+                let mut list_state = ListState::default();
+                if !mappings.is_empty() {
+                    let sel = mappings.iter().position(|m| m.name == state.mapping.name).unwrap_or(0);
+                    list_state.select(Some(sel));
+                }
+                state.popup = Some(Popup::MappingPicker { mappings, list_state });
+            }
+            _ => {
+                // Any other key cancels — go back to picker
+                let mappings = mapping::discover_all_mappings();
+                let mut list_state = ListState::default();
+                if !mappings.is_empty() {
+                    let sel = mappings.iter().position(|m| m.name == state.mapping.name).unwrap_or(0);
+                    list_state.select(Some(sel));
+                }
+                state.popup = Some(Popup::MappingPicker { mappings, list_state });
+            }
         },
         Popup::NoteRename { note, input, cursor } => match key {
             KeyCode::Esc => { state.popup = None; }

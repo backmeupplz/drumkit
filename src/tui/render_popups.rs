@@ -21,6 +21,7 @@ pub(super) fn render_popup(frame: &mut Frame, area: Rect, popup: &Popup, state: 
         Popup::LibraryDir { input, cursor, error } => render_library_dir_popup(frame, area, input, *cursor, error.as_deref(), extra_dirs),
         Popup::Loading { kit_name, progress, total } => render_loading_popup(frame, area, kit_name, progress, total),
         Popup::MappingPicker { mappings, list_state } => render_mapping_popup(frame, area, mappings, list_state, state),
+        Popup::DeleteMapping { name, .. } => render_delete_mapping_popup(frame, area, name),
         Popup::NoteRename { note, input, cursor } => render_note_rename_popup(frame, area, *note, input, *cursor),
     }
 }
@@ -303,10 +304,49 @@ fn render_mapping_popup(
     frame.render_widget(path_hint, path_area);
 
     let footer = Paragraph::new(Line::from(Span::styled(
-        " \u{2191}\u{2193} navigate  Enter select  Esc/n close  q quit",
+        " \u{2191}\u{2193} navigate  Enter select  d delete  Esc/n close  q quit",
         Style::default().fg(Color::DarkGray),
     )));
     frame.render_widget(footer, footer_area);
+}
+
+fn render_delete_mapping_popup(frame: &mut Frame, area: Rect, name: &str) {
+    let popup_w: u16 = 50.min(area.width.saturating_sub(2));
+    let popup_h: u16 = 7.min(area.height.saturating_sub(2));
+    let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
+    let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
+    let popup = Rect::new(x, y, popup_w, popup_h);
+
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Red))
+        .title(" Delete Mapping ")
+        .title_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD));
+
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    if inner.height < 3 || inner.width < 10 {
+        return;
+    }
+
+    let msg = Paragraph::new(vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  Delete \"{}\"?", name),
+            Style::default().fg(Color::White),
+        )),
+    ]);
+    frame.render_widget(msg, Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1)));
+
+    let footer = Paragraph::new(Line::from(Span::styled(
+        " y/Enter confirm  any other key cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+    frame.render_widget(footer, Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1));
 }
 
 fn render_note_rename_popup(

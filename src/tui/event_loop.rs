@@ -96,12 +96,12 @@ pub(super) fn event_loop(
                         state.popup = Some(Popup::MappingPicker { mappings, list_state });
                     }
                     KeyCode::Char('r') => {
-                        // Find the most recent "Unknown" note in hit log
-                        if let Some(entry) = state.hit_log.iter().find(|e| e.name == "Unknown") {
+                        // Rename the most recently hit note
+                        if let Some(entry) = state.hit_log.first() {
                             state.popup = Some(Popup::NoteRename {
                                 note: entry.note,
-                                input: String::new(),
-                                cursor: 0,
+                                input: entry.name.clone(),
+                                cursor: entry.name.len(),
                             });
                         }
                     }

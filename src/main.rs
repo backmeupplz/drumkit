@@ -3,6 +3,7 @@ mod kit;
 mod mapping;
 mod midi;
 mod sample;
+mod settings;
 mod setup;
 mod stderr;
 mod tui;
@@ -376,6 +377,22 @@ fn cmd_test_trigger(file: PathBuf, note: u8, port: Option<usize>, device: Option
 fn cmd_play(kit: Option<PathBuf>, port: Option<usize>, device: Option<usize>, kits_dirs: Vec<PathBuf>) -> Result<()> {
     // If all three are provided, go straight to play
     if let (Some(kit_path), Some(port_idx), Some(dev_idx)) = (&kit, port, device) {
+        // Save explicit CLI choices so they're remembered next time
+        let audio_devices = audio::list_output_devices().unwrap_or_default();
+        let midi_devices = midi::list_devices().unwrap_or_default();
+        let audio_name = audio_devices
+            .iter()
+            .find(|d| d.index == dev_idx)
+            .map(|d| d.name.clone());
+        let midi_name = midi_devices
+            .iter()
+            .find(|d| d.port_index == port_idx)
+            .map(|d| d.name.clone());
+        let _ = settings::save_settings(&settings::Settings {
+            kit_path: Some(kit_path.clone()),
+            audio_device: audio_name,
+            midi_device: midi_name,
+        });
         return cmd_play_direct(kit_path.clone(), port_idx, dev_idx, kits_dirs);
     }
 
@@ -384,13 +401,67 @@ fn cmd_play(kit: Option<PathBuf>, port: Option<usize>, device: Option<usize>, ki
         setup::SetupResult::Selected {
             kit_path,
             audio_device,
+            audio_device_name,
             midi_port,
-        } => cmd_play_direct(kit_path, midi_port, audio_device, kits_dirs),
+            midi_device_name,
+        } => {
+            // Save chosen settings for next launch (names already known from setup)
+            let _ = settings::save_settings(&settings::Settings {
+                kit_path: Some(kit_path.clone()),
+                audio_device: Some(audio_device_name),
+                midi_device: Some(midi_device_name),
+            });
+            cmd_play_direct(kit_path, midi_port, audio_device, kits_dirs)
+        }
         setup::SetupResult::Cancelled => Ok(()),
     }
 }
 
 fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, kits_dirs: Vec<PathBuf>) -> Result<()> {
+    // Enter TUI immediately so the user sees a loading screen instead of a blank terminal
+    let mut terminal = tui::init_terminal()?;
+    let kit_name_display = kit_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "kit".to_string());
+    terminal.draw(|frame| {
+        use ratatui::{
+            style::{Color, Modifier, Style},
+            text::{Line, Span},
+            widgets::{Block, BorderType, Borders, Paragraph},
+        };
+        let area = frame.area();
+        let outer = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(" drumkit ")
+            .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+        let inner = outer.inner(area);
+        frame.render_widget(outer, area);
+        let msg = Paragraph::new(Line::from(Span::styled(
+            format!("  Loading \"{}\"...", kit_name_display),
+            Style::default().fg(Color::DarkGray),
+        )));
+        frame.render_widget(msg, inner);
+    })?;
+
+    match cmd_play_direct_inner(terminal, kit_path, port_index, audio_device, kits_dirs) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            tui::restore_terminal();
+            Err(e)
+        }
+    }
+}
+
+fn cmd_play_direct_inner(
+    terminal: tui::Term,
+    kit_path: PathBuf,
+    port_index: usize,
+    audio_device: usize,
+    kits_dirs: Vec<PathBuf>,
+) -> Result<()> {
     // Start capturing stderr before any device enumeration (ALSA noise)
     let capture = stderr::StderrCapture::start();
 
@@ -567,9 +638,7 @@ fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, ki
         shared_mapping,
     };
 
-    let result = tui::run(tui_rx, state, resources);
-
-    result
+    tui::run(terminal, tui_rx, state, resources)
 }
 
 fn main() -> Result<()> {
