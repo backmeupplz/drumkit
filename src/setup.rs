@@ -11,21 +11,14 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
-use std::io::{stdout, BufRead, BufReader};
-use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::io::stdout;
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::time::Duration;
 
 use crate::audio;
+use crate::kit;
 use crate::midi;
-
-/// A kit directory discovered on disk.
-pub struct DiscoveredKit {
-    pub name: String,
-    pub path: PathBuf,
-    pub wav_count: usize,
-}
+use crate::stderr::StderrCapture;
 
 /// Which step of the setup flow we're on.
 #[derive(Clone, Copy, PartialEq)]
@@ -48,7 +41,7 @@ pub enum SetupResult {
 /// Internal state for the setup TUI.
 struct SetupState {
     step: SetupStep,
-    kits: Vec<DiscoveredKit>,
+    kits: Vec<kit::DiscoveredKit>,
     audio_devices: Vec<audio::AudioDevice>,
     midi_devices: Vec<midi::MidiDevice>,
     kit_list_state: ListState,
@@ -62,156 +55,6 @@ struct SetupState {
     log_lines: Vec<String>,
     show_log: bool,
     log_scroll: usize,
-}
-
-/// Redirect stderr (fd 2) to a pipe. Returns the receiver for captured lines
-/// and the saved fd to restore later.
-pub struct StderrCapture {
-    saved_fd: i32,
-    rx: mpsc::Receiver<String>,
-}
-
-impl StderrCapture {
-    pub fn start() -> Option<Self> {
-        let mut fds = [0i32; 2];
-        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
-            return None;
-        }
-        let read_fd = fds[0];
-        let write_fd = fds[1];
-
-        let stderr_fd = std::io::stderr().as_raw_fd();
-        let saved_fd = unsafe { libc::dup(stderr_fd) };
-        if saved_fd < 0 {
-            unsafe {
-                libc::close(read_fd);
-                libc::close(write_fd);
-            }
-            return None;
-        }
-
-        // Point stderr at the write end of the pipe
-        unsafe { libc::dup2(write_fd, stderr_fd) };
-        unsafe { libc::close(write_fd) };
-
-        let (tx, rx) = mpsc::channel();
-
-        // Background thread reads lines from the pipe
-        std::thread::spawn(move || {
-            let file = unsafe { std::fs::File::from_raw_fd(read_fd) };
-            let reader = BufReader::new(file);
-            for line in reader.lines() {
-                match line {
-                    Ok(l) => {
-                        if tx.send(l).is_err() {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-
-        Some(Self { saved_fd, rx })
-    }
-
-    /// Drain any new lines into the provided vec.
-    pub fn drain_into(&self, log: &mut Vec<String>) {
-        while let Ok(line) = self.rx.try_recv() {
-            log.push(line);
-        }
-    }
-
-    /// Restore the original stderr fd.
-    pub fn restore(self) {
-        let stderr_fd = std::io::stderr().as_raw_fd();
-        unsafe {
-            libc::dup2(self.saved_fd, stderr_fd);
-            libc::close(self.saved_fd);
-        }
-    }
-}
-
-/// Return the built-in search directories (for display purposes).
-pub fn default_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = vec![PathBuf::from("./kits")];
-    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-        dirs.push(PathBuf::from(xdg).join("drumkit/kits"));
-    } else if let Ok(home) = std::env::var("HOME") {
-        dirs.push(PathBuf::from(home).join(".local/share/drumkit/kits"));
-    }
-    dirs
-}
-
-/// Scan standard locations for kit directories containing .wav files.
-pub fn discover_kits(extra_dirs: &[PathBuf]) -> Vec<DiscoveredKit> {
-    let mut kits = Vec::new();
-    let mut seen_paths = std::collections::HashSet::new();
-
-    let mut search_dirs = vec![PathBuf::from("./kits")];
-
-    // XDG_DATA_HOME or ~/.local/share
-    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-        search_dirs.push(PathBuf::from(xdg).join("drumkit/kits"));
-    } else if let Ok(home) = std::env::var("HOME") {
-        search_dirs.push(PathBuf::from(home).join(".local/share/drumkit/kits"));
-    }
-
-    // Append user-supplied extra directories
-    search_dirs.extend_from_slice(extra_dirs);
-
-    for search_dir in &search_dirs {
-        let entries = match std::fs::read_dir(search_dir) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-
-            let canonical = match path.canonicalize() {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            if !seen_paths.insert(canonical) {
-                continue;
-            }
-
-            let wav_count = std::fs::read_dir(&path)
-                .map(|rd| {
-                    rd.filter_map(|e| e.ok())
-                        .filter(|e| {
-                            e.path()
-                                .extension()
-                                .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
-                        })
-                        .count()
-                })
-                .unwrap_or(0);
-
-            if wav_count == 0 {
-                continue;
-            }
-
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "unnamed".to_string());
-
-            kits.push(DiscoveredKit {
-                name,
-                path,
-                wav_count,
-            });
-        }
-    }
-
-    kits.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    kits
 }
 
 /// Run the interactive setup TUI.
@@ -237,7 +80,7 @@ pub fn run_setup(
     // Start capturing stderr before device enumeration
     let capture = StderrCapture::start();
 
-    let kits = discover_kits(extra_kits_dirs);
+    let kits = kit::discover_kits(extra_kits_dirs);
     let audio_devices = audio::list_output_devices()?;
     let midi_devices = midi::list_devices()?;
 

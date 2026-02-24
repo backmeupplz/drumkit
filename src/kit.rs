@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -143,7 +143,7 @@ pub fn note_keys(notes: &HashMap<u8, Arc<NoteGroup>>) -> Vec<u8> {
 }
 
 /// Print a human-readable summary of a loaded kit to stdout.
-pub fn print_summary(kit: &Kit) {
+pub fn print_summary(kit: &Kit, mapping: &crate::mapping::NoteMapping) {
     let keys = note_keys(&kit.notes);
     println!(
         "Kit \"{}\" loaded: {} notes, {} Hz, {} ch",
@@ -167,144 +167,21 @@ pub fn print_summary(kit: &Kit) {
         println!(
             "  note {:>3} → {}{}",
             n,
-            crate::midi::drum_name(n),
+            mapping.drum_name(n),
             variant_info
         );
     }
 }
 
-/// Like `load_kit`, but reports progress via atomic counters so a UI thread
-/// can display a progress bar while loading runs in the background.
-pub fn load_kit_with_progress(
-    path: &Path,
-    progress: &Arc<AtomicUsize>,
-    total: &Arc<AtomicUsize>,
-) -> Result<Kit> {
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "unnamed".to_string());
-
-    let mut entries: Vec<_> = std::fs::read_dir(path)
-        .with_context(|| format!("Failed to read kit directory: {}", path.display()))?
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| is_audio_file(ext))
-        })
-        .collect();
-
-    if entries.is_empty() {
-        anyhow::bail!("No audio files found in {}", path.display());
-    }
-
-    entries.sort_by_key(|e| e.file_name());
-    total.store(entries.len(), Ordering::Relaxed);
-
-    let mut variants_map: HashMap<u8, Vec<SampleVariant>> = HashMap::new();
-    let mut kit_sample_rate: Option<u32> = None;
-    let mut kit_channels: Option<u16> = None;
-
-    for entry in &entries {
-        let file_path = entry.path();
-        let filename = entry.file_name();
-        let filename_str = filename.to_string_lossy();
-
-        let info = match parse_sample_filename(&filename_str) {
-            Some(info) => info,
-            None => {
-                eprintln!("  Skipping {} (cannot parse note number)", filename_str);
-                progress.fetch_add(1, Ordering::Relaxed);
-                continue;
-            }
-        };
-
-        let data = sample::load_audio(&file_path)
-            .with_context(|| format!("Failed to load {}", file_path.display()))?;
-
-        progress.fetch_add(1, Ordering::Relaxed);
-
-        match kit_sample_rate {
-            None => kit_sample_rate = Some(data.sample_rate),
-            Some(sr) if sr != data.sample_rate => {
-                anyhow::bail!(
-                    "Sample rate mismatch in {}: expected {} Hz, got {} Hz",
-                    filename_str,
-                    sr,
-                    data.sample_rate
-                );
-            }
-            _ => {}
-        }
-
-        match kit_channels {
-            None => kit_channels = Some(data.channels),
-            Some(ch) if ch != data.channels => {
-                anyhow::bail!(
-                    "Channel count mismatch in {}: expected {}, got {}",
-                    filename_str,
-                    ch,
-                    data.channels
-                );
-            }
-            _ => {}
-        }
-
-        let variant = SampleVariant {
-            samples: Arc::new(data.samples),
-            velocity_layer: info.velocity_layer.unwrap_or(1),
-            round_robin: info.round_robin.unwrap_or(1),
-        };
-
-        variants_map.entry(info.note).or_default().push(variant);
-    }
-
-    if variants_map.is_empty() {
-        anyhow::bail!(
-            "No parseable audio filenames in {} (expected e.g. 36.wav, 38_v1_rr1.flac)",
-            path.display()
-        );
-    }
-
-    let sample_rate = kit_sample_rate.unwrap();
-    let channels = kit_channels.unwrap();
-
-    let mut notes: HashMap<u8, Arc<NoteGroup>> = HashMap::new();
-    for (note, mut variants) in variants_map {
-        variants.sort_by(|a, b| {
-            a.velocity_layer
-                .cmp(&b.velocity_layer)
-                .then(a.round_robin.cmp(&b.round_robin))
-        });
-
-        let max_velocity_layer = variants.iter().map(|v| v.velocity_layer).max().unwrap_or(1);
-        let max_round_robin = variants.iter().map(|v| v.round_robin).max().unwrap_or(1);
-
-        notes.insert(
-            note,
-            Arc::new(NoteGroup {
-                variants,
-                max_velocity_layer,
-                max_round_robin,
-                rr_counter: AtomicUsize::new(0),
-            }),
-        );
-    }
-
-    Ok(Kit {
-        name,
-        notes,
-        sample_rate,
-        channels,
-    })
-}
-
-/// Load all audio files from a directory and map them by MIDI note number.
+/// Shared loading logic for `load_kit` and `load_kit_with_progress`.
 ///
-/// All samples must share the same sample rate and channel count.
-/// Files with the same note number are grouped by velocity layer and round-robin.
-pub fn load_kit(path: &Path) -> Result<Kit> {
+/// `on_entries_counted` is called once with the total file count after reading the directory.
+/// `on_file_done` is called after each file is processed (whether loaded or skipped).
+fn load_kit_inner(
+    path: &Path,
+    on_entries_counted: &mut dyn FnMut(usize),
+    on_file_done: &mut dyn FnMut(),
+) -> Result<Kit> {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -326,6 +203,7 @@ pub fn load_kit(path: &Path) -> Result<Kit> {
 
     // Sort alphabetically for deterministic ordering
     entries.sort_by_key(|e| e.file_name());
+    on_entries_counted(entries.len());
 
     let mut variants_map: HashMap<u8, Vec<SampleVariant>> = HashMap::new();
     let mut kit_sample_rate: Option<u32> = None;
@@ -340,6 +218,7 @@ pub fn load_kit(path: &Path) -> Result<Kit> {
             Some(info) => info,
             None => {
                 eprintln!("  Skipping {} (cannot parse note number)", filename_str);
+                on_file_done();
                 continue;
             }
         };
@@ -347,7 +226,8 @@ pub fn load_kit(path: &Path) -> Result<Kit> {
         let data = sample::load_audio(&file_path)
             .with_context(|| format!("Failed to load {}", file_path.display()))?;
 
-        // Validate sample rate and channel count consistency
+        on_file_done();
+
         match kit_sample_rate {
             None => kit_sample_rate = Some(data.sample_rate),
             Some(sr) if sr != data.sample_rate => {
@@ -423,6 +303,117 @@ pub fn load_kit(path: &Path) -> Result<Kit> {
         sample_rate,
         channels,
     })
+}
+
+/// Load all audio files from a directory and map them by MIDI note number.
+///
+/// All samples must share the same sample rate and channel count.
+/// Files with the same note number are grouped by velocity layer and round-robin.
+pub fn load_kit(path: &Path) -> Result<Kit> {
+    load_kit_inner(path, &mut |_| {}, &mut || {})
+}
+
+/// Like `load_kit`, but reports progress via atomic counters so a UI thread
+/// can display a progress bar while loading runs in the background.
+pub fn load_kit_with_progress(
+    path: &Path,
+    progress: &Arc<AtomicUsize>,
+    total: &Arc<AtomicUsize>,
+) -> Result<Kit> {
+    load_kit_inner(
+        path,
+        &mut |count| { total.store(count, Ordering::Relaxed); },
+        &mut || { progress.fetch_add(1, Ordering::Relaxed); },
+    )
+}
+
+/// A kit directory discovered on disk.
+pub struct DiscoveredKit {
+    pub name: String,
+    pub path: PathBuf,
+    pub wav_count: usize,
+}
+
+/// Return the built-in search directories (for display purposes).
+pub fn default_search_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![PathBuf::from("./kits")];
+    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+        dirs.push(PathBuf::from(xdg).join("drumkit/kits"));
+    } else if let Ok(home) = std::env::var("HOME") {
+        dirs.push(PathBuf::from(home).join(".local/share/drumkit/kits"));
+    }
+    dirs
+}
+
+/// Scan standard locations for kit directories containing .wav files.
+pub fn discover_kits(extra_dirs: &[PathBuf]) -> Vec<DiscoveredKit> {
+    let mut kits = Vec::new();
+    let mut seen_paths = std::collections::HashSet::new();
+
+    let mut search_dirs = vec![PathBuf::from("./kits")];
+
+    // XDG_DATA_HOME or ~/.local/share
+    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+        search_dirs.push(PathBuf::from(xdg).join("drumkit/kits"));
+    } else if let Ok(home) = std::env::var("HOME") {
+        search_dirs.push(PathBuf::from(home).join(".local/share/drumkit/kits"));
+    }
+
+    // Append user-supplied extra directories
+    search_dirs.extend_from_slice(extra_dirs);
+
+    for search_dir in &search_dirs {
+        let entries = match std::fs::read_dir(search_dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let canonical = match path.canonicalize() {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            if !seen_paths.insert(canonical) {
+                continue;
+            }
+
+            let wav_count = std::fs::read_dir(&path)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .filter(|e| {
+                            e.path()
+                                .extension()
+                                .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+                        })
+                        .count()
+                })
+                .unwrap_or(0);
+
+            if wav_count == 0 {
+                continue;
+            }
+
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "unnamed".to_string());
+
+            kits.push(DiscoveredKit {
+                name,
+                path,
+                wav_count,
+            });
+        }
+    }
+
+    kits.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    kits
 }
 
 #[cfg(test)]

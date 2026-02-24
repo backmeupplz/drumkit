@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
+use arc_swap::ArcSwap;
 use midir::MidiInput;
+use std::collections::HashMap;
 use std::fmt;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 
 /// MIDI message types relevant to drum kits
 #[derive(Debug, Clone, PartialEq)]
@@ -79,17 +81,6 @@ impl MidiMessage {
             },
             _ => MidiMessage::Other { data: data.to_vec() },
         }
-    }
-}
-
-/// Directed hi-hat choke rules: when `note` is triggered, these notes get choked.
-/// Closing chokes open (hierarchical), but not vice versa.
-pub fn choke_targets(note: u8) -> &'static [u8] {
-    match note {
-        42 => &[46, 23, 21], // Closed HH chokes Open, Half-Open, Splash
-        44 => &[46, 23, 21], // Pedal HH chokes Open, Half-Open, Splash
-        23 => &[46],         // Half-Open chokes Open only
-        _ => &[],
     }
 }
 
@@ -295,6 +286,66 @@ pub fn connect(
         .map_err(|e| anyhow::anyhow!("Failed to connect to MIDI port {}: {}", port_name, e))?;
 
     Ok(connection)
+}
+
+/// Build the MIDI callback closure that pushes AudioCommands via a shared producer.
+///
+/// The producer is wrapped in `Arc<Mutex<Option<Producer>>>` so it can be swapped
+/// during audio device switches (set to None to silence, then replace with new producer).
+pub fn build_midi_callback(
+    producer: Arc<Mutex<Option<rtrb::Producer<crate::audio::AudioCommand>>>>,
+    shared_notes: Arc<ArcSwap<HashMap<u8, Arc<crate::kit::NoteGroup>>>>,
+    shared_mapping: Arc<ArcSwap<crate::mapping::NoteMapping>>,
+    tui_tx: mpsc::Sender<crate::tui::TuiEvent>,
+    choke_fade: usize,
+    aftertouch_fade: usize,
+) -> impl FnMut(u64, &[u8]) + Send + 'static {
+    move |_timestamp, data: &[u8]| {
+        if data.len() == 3 {
+            let status = data[0] & 0xF0;
+            let note = data[1];
+            let velocity = data[2];
+
+            // Lock the producer — ~50ns uncontended, negligible for drum events
+            let mut guard = producer.lock().unwrap();
+            let Some(ref mut prod) = *guard else { return };
+
+            // Note-on with velocity > 0
+            if status == 0x90 && velocity > 0 {
+                let current_mapping = shared_mapping.load();
+                for &target in current_mapping.choke_targets(note) {
+                    let _ = prod.push(crate::audio::AudioCommand::Choke {
+                        note: target,
+                        fade_frames: choke_fade,
+                    });
+                    let _ = tui_tx.send(crate::tui::TuiEvent::Choke { note: target });
+                }
+
+                let kit_notes = shared_notes.load();
+                if let Some(group) = kit_notes.get(&note) {
+                    if let Some(samples) = group.select(velocity) {
+                        let gain = velocity as f32 / 127.0;
+                        let _ = prod.push(crate::audio::AudioCommand::Trigger {
+                            samples: Arc::clone(samples),
+                            gain,
+                            note,
+                        });
+                    }
+                }
+
+                let _ = tui_tx.send(crate::tui::TuiEvent::Hit { note, velocity });
+            }
+
+            // Polyphonic aftertouch (cymbal grab choke)
+            if status == 0xA0 && velocity == 127 {
+                let _ = prod.push(crate::audio::AudioCommand::Choke {
+                    note,
+                    fade_frames: aftertouch_fade,
+                });
+                let _ = tui_tx.send(crate::tui::TuiEvent::Choke { note });
+            }
+        }
+    }
 }
 
 #[cfg(test)]

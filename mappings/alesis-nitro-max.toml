@@ -1,0 +1,35 @@
+name = "Alesis Nitro Max"
+
+[notes]
+21 = "HH Splash"
+23 = "HH Half-Open"
+35 = "Bass Drum 2"
+36 = "Kick"
+37 = "Side Stick"
+38 = "Snare"
+39 = "Tom 4 (Rim)"
+40 = "Snare (Rim)"
+41 = "Tom 4"
+42 = "Closed Hi-Hat"
+43 = "Tom 3"
+44 = "Pedal Hi-Hat"
+45 = "Tom 2"
+46 = "Open Hi-Hat"
+47 = "Tom 2 (Rim)"
+48 = "Tom 1"
+49 = "Crash 1"
+50 = "Tom 1 (Rim)"
+51 = "Ride"
+52 = "Chinese Cymbal"
+53 = "Ride Bell"
+54 = "Tambourine"
+55 = "Splash Cymbal"
+56 = "Cowbell"
+57 = "Crash 2"
+58 = "Tom 3 (Rim)"
+59 = "Ride 2"
+
+[chokes]
+42 = [46, 23, 21]
+44 = [46, 23, 21]
+23 = [46]

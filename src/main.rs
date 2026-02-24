@@ -1,8 +1,10 @@
 mod audio;
 mod kit;
+mod mapping;
 mod midi;
 mod sample;
 mod setup;
+mod stderr;
 mod tui;
 
 use anyhow::{Context, Result};
@@ -10,7 +12,6 @@ use arc_swap::ArcSwap;
 use clap::{Parser, Subcommand};
 use crossterm::style::{self, Stylize};
 use notify::Watcher;
-use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
@@ -61,7 +62,10 @@ enum Commands {
         #[arg(short, long)]
         device: Option<usize>,
     },
-    /// Play a full drum kit — load samples from a folder, trigger by MIDI note
+    /// Play a full drum kit — load samples from a folder, trigger by MIDI note.
+    ///
+    /// Kits are discovered from ~/.local/share/drumkit/kits/ and ./kits/.
+    /// MIDI note mappings are loaded from ~/.local/share/drumkit/mappings/.
     Play {
         /// Path to kit directory containing WAV files (e.g. 36.wav, 38.wav).
         /// If omitted, an interactive picker lets you choose from discovered kits.
@@ -344,7 +348,8 @@ fn cmd_test_trigger(file: PathBuf, note: u8, port: Option<usize>, device: Option
         }
     })?;
 
-    let drum = midi::drum_name(note);
+    let gm_mapping = mapping::default_mapping();
+    let drum = gm_mapping.drum_name(note);
     println!();
     println!(
         "{}",
@@ -368,64 +373,6 @@ fn cmd_test_trigger(file: PathBuf, note: u8, port: Option<usize>, device: Option
     Ok(())
 }
 
-/// Build the MIDI callback closure that pushes AudioCommands via a shared producer.
-///
-/// The producer is wrapped in `Arc<Mutex<Option<Producer>>>` so it can be swapped
-/// during audio device switches (set to None to silence, then replace with new producer).
-pub fn build_midi_callback(
-    producer: Arc<Mutex<Option<rtrb::Producer<audio::AudioCommand>>>>,
-    shared_notes: Arc<ArcSwap<HashMap<u8, Arc<kit::NoteGroup>>>>,
-    tui_tx: mpsc::Sender<tui::TuiEvent>,
-    choke_fade: usize,
-    aftertouch_fade: usize,
-) -> impl FnMut(u64, &[u8]) + Send + 'static {
-    move |_timestamp, data: &[u8]| {
-        if data.len() == 3 {
-            let status = data[0] & 0xF0;
-            let note = data[1];
-            let velocity = data[2];
-
-            // Lock the producer — ~50ns uncontended, negligible for drum events
-            let mut guard = producer.lock().unwrap();
-            let Some(ref mut prod) = *guard else { return };
-
-            // Note-on with velocity > 0
-            if status == 0x90 && velocity > 0 {
-                for &target in midi::choke_targets(note) {
-                    let _ = prod.push(audio::AudioCommand::Choke {
-                        note: target,
-                        fade_frames: choke_fade,
-                    });
-                    let _ = tui_tx.send(tui::TuiEvent::Choke { note: target });
-                }
-
-                let kit_notes = shared_notes.load();
-                if let Some(group) = kit_notes.get(&note) {
-                    if let Some(samples) = group.select(velocity) {
-                        let gain = velocity as f32 / 127.0;
-                        let _ = prod.push(audio::AudioCommand::Trigger {
-                            samples: Arc::clone(samples),
-                            gain,
-                            note,
-                        });
-                    }
-                }
-
-                let _ = tui_tx.send(tui::TuiEvent::Hit { note, velocity });
-            }
-
-            // Polyphonic aftertouch (cymbal grab choke)
-            if status == 0xA0 && velocity == 127 {
-                let _ = prod.push(audio::AudioCommand::Choke {
-                    note,
-                    fade_frames: aftertouch_fade,
-                });
-                let _ = tui_tx.send(tui::TuiEvent::Choke { note });
-            }
-        }
-    }
-}
-
 fn cmd_play(kit: Option<PathBuf>, port: Option<usize>, device: Option<usize>, kits_dirs: Vec<PathBuf>) -> Result<()> {
     // If all three are provided, go straight to play
     if let (Some(kit_path), Some(port_idx), Some(dev_idx)) = (&kit, port, device) {
@@ -445,12 +392,15 @@ fn cmd_play(kit: Option<PathBuf>, port: Option<usize>, device: Option<usize>, ki
 
 fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, kits_dirs: Vec<PathBuf>) -> Result<()> {
     // Start capturing stderr before any device enumeration (ALSA noise)
-    let capture = setup::StderrCapture::start();
+    let capture = stderr::StderrCapture::start();
 
     let loaded_kit = kit::load_kit(&kit_path)?;
 
+    // Load default mapping (General MIDI)
+    let shared_mapping = Arc::new(ArcSwap::from_pointee(mapping::default_mapping()));
+
     // Print summary before entering TUI (visible in normal screen buffer)
-    kit::print_summary(&loaded_kit);
+    kit::print_summary(&loaded_kit, &shared_mapping.load());
 
     // Pre-compute fade durations in frames
     let choke_fade = (loaded_kit.sample_rate as f64 * 0.068) as usize; // 68ms hi-hat choke
@@ -481,9 +431,10 @@ fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, ki
     // Connect MIDI using the shared producer
     let connection = midi::connect_callback(
         port_index,
-        build_midi_callback(
+        midi::build_midi_callback(
             Arc::clone(&shared_producer),
             Arc::clone(&shared_notes),
+            Arc::clone(&shared_mapping),
             tui_tx.clone(),
             choke_fade,
             aftertouch_fade,
@@ -578,6 +529,7 @@ fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, ki
 
     // Build TUI state and run
     let note_keys = kit::note_keys(&shared_notes.load());
+    let current_mapping = Arc::clone(&shared_mapping.load());
     let state = tui::AppState::new(
         loaded_kit.name,
         midi_device_name,
@@ -585,6 +537,7 @@ fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, ki
         stream_channels,
         &note_keys,
         initial_log,
+        current_mapping,
     );
 
     let resources = tui::PlayResources {
@@ -603,6 +556,7 @@ fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, ki
         watcher,
         stderr_capture: capture,
         extra_kits_dirs: kits_dirs,
+        shared_mapping,
     };
 
     let result = tui::run(tui_rx, state, resources);
