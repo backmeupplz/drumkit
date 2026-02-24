@@ -33,6 +33,8 @@ yay -S drumkit
 ### From source
 
 ```
+git clone --recursive https://github.com/backmeupplz/drumkit.git
+cd drumkit
 cargo install --path .
 ```
 
@@ -40,6 +42,18 @@ cargo install --path .
 
 - Rust 1.75+
 - ALSA development libraries: `sudo pacman -S alsa-lib` (Arch) or `sudo apt install libasound2-dev` (Debian/Ubuntu)
+
+### Sample kits
+
+Sample kits (FreePats GM) live in a [separate repo](https://github.com/backmeupplz/drumkit-kits) to keep the main repo light — binary WAV files bloat git history. They're included as a git submodule at `./kits/`.
+
+If you cloned without `--recursive`, pull the kits with:
+
+```bash
+git submodule update --init
+```
+
+drumkit will find them automatically in `./kits/` at startup.
 
 ## Quick Start
 
@@ -164,8 +178,8 @@ This brings PipeWire's buffer down to ~1.3ms. Combined with drumkit's lock-free 
 ## Contributing
 
 ```bash
-# Clone the repo
-git clone https://github.com/backmeupplz/drumkit.git
+# Clone with sample kits
+git clone --recursive https://github.com/backmeupplz/drumkit.git
 cd drumkit
 
 # Build in debug mode
