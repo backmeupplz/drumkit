@@ -23,14 +23,14 @@ use crate::{audio, kit, mapping, midi, stderr};
 pub enum TuiEvent {
     Hit { note: u8, velocity: u8 },
     Choke { note: u8 },
-    KitReloaded { note_keys: Vec<u8> },
+    KitReloaded { note_keys: Vec<u8>, kit_path: PathBuf },
     KitReloadError(String),
     KitLoadComplete {
         result: Result<kit::Kit, String>,
         path: PathBuf,
         name: String,
     },
-    MappingReloaded(mapping::NoteMapping),
+    MappingReloaded(mapping::NoteMapping, PathBuf),
 }
 
 /// Mode for the library directory popup.

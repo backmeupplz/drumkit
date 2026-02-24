@@ -117,14 +117,21 @@ pub(super) fn event_loop(
             match ev {
                 TuiEvent::Hit { note, velocity } => state.on_hit(note, velocity),
                 TuiEvent::Choke { note } => state.on_choke(note),
-                TuiEvent::KitReloaded { note_keys } => {
+                TuiEvent::KitReloaded { note_keys, kit_path } => {
+                    // Ignore stale reload events from the old kit
+                    if kit_path != resources.kit_path {
+                        continue;
+                    }
                     state.rebuild_pads(&note_keys);
                     state.set_status("Kit reloaded".to_string());
                 }
                 TuiEvent::KitReloadError(msg) => {
                     state.set_status(format!("Reload error: {}", msg));
                 }
-                TuiEvent::MappingReloaded(new_mapping) => {
+                TuiEvent::MappingReloaded(new_mapping, kit_path) => {
+                    if kit_path != resources.kit_path {
+                        continue;
+                    }
                     let new_mapping = Arc::new(new_mapping);
                     state.mapping = new_mapping;
                     state.update_hit_log_names();

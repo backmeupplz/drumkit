@@ -590,10 +590,10 @@ fn cmd_play_direct_inner(
                                     // Reload kit mapping if mapping.toml changed
                                     if let Some(new_mapping) = mapping::load_kit_mapping(&current_path) {
                                         debounce_shared_mapping.store(Arc::new(new_mapping.clone()));
-                                        let _ = debounce_tui_tx.send(tui::TuiEvent::MappingReloaded(new_mapping));
+                                        let _ = debounce_tui_tx.send(tui::TuiEvent::MappingReloaded(new_mapping, current_path.to_path_buf()));
                                     }
                                     let _ = debounce_tui_tx
-                                        .send(tui::TuiEvent::KitReloaded { note_keys });
+                                        .send(tui::TuiEvent::KitReloaded { note_keys, kit_path: (*current_path).to_path_buf() });
                                 }
                             }
                             Err(e) => {
