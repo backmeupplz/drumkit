@@ -122,6 +122,44 @@ pub struct Kit {
     pub channels: u16,
 }
 
+/// Return sorted note keys for a kit's note map.
+pub fn note_keys(notes: &HashMap<u8, Arc<NoteGroup>>) -> Vec<u8> {
+    let mut keys: Vec<u8> = notes.keys().copied().collect();
+    keys.sort();
+    keys
+}
+
+/// Print a human-readable summary of a loaded kit to stdout.
+pub fn print_summary(kit: &Kit) {
+    let keys = note_keys(&kit.notes);
+    println!(
+        "Kit \"{}\" loaded: {} notes, {} Hz, {} ch",
+        kit.name,
+        keys.len(),
+        kit.sample_rate,
+        kit.channels
+    );
+    for &n in &keys {
+        let group = &kit.notes[&n];
+        let variant_info = if group.max_velocity_layer > 1 || group.max_round_robin > 1 {
+            format!(
+                " ({}v x {}rr = {} variants)",
+                group.max_velocity_layer,
+                group.max_round_robin,
+                group.variants.len()
+            )
+        } else {
+            String::new()
+        };
+        println!(
+            "  note {:>3} → {}{}",
+            n,
+            crate::midi::drum_name(n),
+            variant_info
+        );
+    }
+}
+
 /// Load all WAV files from a directory and map them by MIDI note number.
 ///
 /// All WAVs must share the same sample rate and channel count.
@@ -236,36 +274,6 @@ pub fn load_kit(path: &Path) -> Result<Kit> {
                 max_round_robin,
                 rr_counter: AtomicUsize::new(0),
             }),
-        );
-    }
-
-    // Print summary
-    let mut note_keys: Vec<u8> = notes.keys().copied().collect();
-    note_keys.sort();
-    println!(
-        "Kit \"{}\" loaded: {} notes, {} Hz, {} ch",
-        name,
-        note_keys.len(),
-        sample_rate,
-        channels
-    );
-    for &n in &note_keys {
-        let group = &notes[&n];
-        let variant_info = if group.max_velocity_layer > 1 || group.max_round_robin > 1 {
-            format!(
-                " ({}v x {}rr = {} variants)",
-                group.max_velocity_layer,
-                group.max_round_robin,
-                group.variants.len()
-            )
-        } else {
-            String::new()
-        };
-        println!(
-            "  note {:>3} → {}{}",
-            n,
-            crate::midi::drum_name(n),
-            variant_info
         );
     }
 

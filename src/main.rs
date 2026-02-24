@@ -2,6 +2,8 @@ mod audio;
 mod kit;
 mod midi;
 mod sample;
+mod setup;
+mod tui;
 
 use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
@@ -11,7 +13,7 @@ use notify::Watcher;
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Parser)]
@@ -61,9 +63,10 @@ enum Commands {
     },
     /// Play a full drum kit — load samples from a folder, trigger by MIDI note
     Play {
-        /// Path to kit directory containing WAV files (e.g. 36.wav, 38.wav)
+        /// Path to kit directory containing WAV files (e.g. 36.wav, 38.wav).
+        /// If omitted, an interactive picker lets you choose from discovered kits.
         #[arg(short, long)]
-        kit: PathBuf,
+        kit: Option<PathBuf>,
         /// MIDI port number from 'drumkit devices'. Prompts if omitted.
         #[arg(short, long)]
         port: Option<usize>,
@@ -362,142 +365,127 @@ fn cmd_test_trigger(file: PathBuf, note: u8, port: Option<usize>, device: Option
     Ok(())
 }
 
-/// Directed hi-hat choke rules: when `note` is triggered, these notes get choked.
-/// Closing chokes open (hierarchical), but not vice versa.
-fn choke_targets(note: u8) -> &'static [u8] {
-    match note {
-        42 => &[46, 23, 21], // Closed HH chokes Open, Half-Open, Splash
-        44 => &[46, 23, 21], // Pedal HH chokes Open, Half-Open, Splash
-        23 => &[46],         // Half-Open chokes Open only
-        _ => &[],
-    }
-}
-
-/// Reload the kit from disk and atomically swap into the shared ArcSwap.
-/// On failure, logs the error and keeps the old kit.
-fn reload_kit(
-    kit_path: &PathBuf,
-    expected_sample_rate: u32,
-    expected_channels: u16,
-    shared_notes: &Arc<ArcSwap<HashMap<u8, Arc<kit::NoteGroup>>>>,
-) {
-    match kit::load_kit(kit_path) {
-        Ok(new_kit) => {
-            if new_kit.sample_rate != expected_sample_rate {
-                eprintln!(
-                    "{}",
-                    format!(
-                        "[reload] ERROR: sample rate mismatch (expected {} Hz, got {} Hz) — keeping old kit",
-                        expected_sample_rate, new_kit.sample_rate
-                    )
-                    .with(style::Color::Red)
-                );
-                return;
-            }
-            if new_kit.channels != expected_channels {
-                eprintln!(
-                    "{}",
-                    format!(
-                        "[reload] ERROR: channel count mismatch (expected {}, got {}) — keeping old kit",
-                        expected_channels, new_kit.channels
-                    )
-                    .with(style::Color::Red)
-                );
-                return;
-            }
-            shared_notes.store(Arc::new(new_kit.notes));
-            println!(
-                "{}",
-                "[reload] Kit reloaded".with(style::Color::Green)
-            );
-        }
-        Err(e) => {
-            eprintln!(
-                "{}",
-                format!("[reload] ERROR: {} — keeping old kit", e)
-                    .with(style::Color::Red)
-            );
-        }
-    }
-}
-
-fn cmd_play(kit_path: PathBuf, port: Option<usize>, device: Option<usize>) -> Result<()> {
-    let device = resolve_audio_device(device)?;
-    let loaded_kit = kit::load_kit(&kit_path)?;
-
-    // Pre-compute fade durations in frames
-    let choke_fade = (loaded_kit.sample_rate as f64 * 0.068) as usize; // 68ms hi-hat choke
-    let aftertouch_fade = (loaded_kit.sample_rate as f64 * 0.085) as usize; // 85ms cymbal grab
-
-    // Set up rtrb ring buffer for MIDI→audio communication (128 to handle choke bursts)
-    let (mut producer, consumer) = rtrb::RingBuffer::new(128);
-
-    // Start persistent audio output stream
-    let _stream = audio::run_output_stream(device, consumer, loaded_kit.sample_rate, loaded_kit.channels)?;
-
-    // Resolve MIDI port
-    let devices = midi::list_devices()?;
-    if devices.is_empty() {
-        anyhow::bail!("No MIDI input devices found. Connect your drum module via USB.");
-    }
-
-    let port_index = match port {
-        Some(p) => {
-            if p >= devices.len() {
-                anyhow::bail!(
-                    "Port index {} out of range (0-{})",
-                    p,
-                    devices.len() - 1
-                );
-            }
-            p
-        }
-        None => select_port(&devices)?,
-    };
-
-    // Wrap kit notes in ArcSwap for lock-free hot-reload
-    let shared_notes = Arc::new(ArcSwap::from_pointee(loaded_kit.notes));
-    let midi_notes = Arc::clone(&shared_notes);
-
-    // Connect MIDI with a raw callback — no allocation in the hot path
-    let _connection = midi::connect_callback(port_index, move |_timestamp, data| {
+/// Build the MIDI callback closure that pushes AudioCommands via a shared producer.
+///
+/// The producer is wrapped in `Arc<Mutex<Option<Producer>>>` so it can be swapped
+/// during audio device switches (set to None to silence, then replace with new producer).
+pub fn build_midi_callback(
+    producer: Arc<Mutex<Option<rtrb::Producer<audio::AudioCommand>>>>,
+    shared_notes: Arc<ArcSwap<HashMap<u8, Arc<kit::NoteGroup>>>>,
+    tui_tx: mpsc::Sender<tui::TuiEvent>,
+    choke_fade: usize,
+    aftertouch_fade: usize,
+) -> impl FnMut(u64, &[u8]) + Send + 'static {
+    move |_timestamp, data: &[u8]| {
         if data.len() == 3 {
             let status = data[0] & 0xF0;
             let note = data[1];
             let velocity = data[2];
 
+            // Lock the producer — ~50ns uncontended, negligible for drum events
+            let mut guard = producer.lock().unwrap();
+            let Some(ref mut prod) = *guard else { return };
+
             // Note-on with velocity > 0
             if status == 0x90 && velocity > 0 {
-                // Send choke commands for notes this trigger should silence
-                for &target in choke_targets(note) {
-                    let _ = producer.push(audio::AudioCommand::Choke {
+                for &target in midi::choke_targets(note) {
+                    let _ = prod.push(audio::AudioCommand::Choke {
                         note: target,
                         fade_frames: choke_fade,
                     });
+                    let _ = tui_tx.send(tui::TuiEvent::Choke { note: target });
                 }
 
-                let kit_notes = midi_notes.load();
+                let kit_notes = shared_notes.load();
                 if let Some(group) = kit_notes.get(&note) {
                     if let Some(samples) = group.select(velocity) {
                         let gain = velocity as f32 / 127.0;
-                        let _ = producer.push(audio::AudioCommand::Trigger {
+                        let _ = prod.push(audio::AudioCommand::Trigger {
                             samples: Arc::clone(samples),
                             gain,
                             note,
                         });
                     }
                 }
+
+                let _ = tui_tx.send(tui::TuiEvent::Hit { note, velocity });
             }
 
             // Polyphonic aftertouch (cymbal grab choke)
             if status == 0xA0 && velocity == 127 {
-                let _ = producer.push(audio::AudioCommand::Choke {
+                let _ = prod.push(audio::AudioCommand::Choke {
                     note,
                     fade_frames: aftertouch_fade,
                 });
+                let _ = tui_tx.send(tui::TuiEvent::Choke { note });
             }
         }
-    })?;
+    }
+}
+
+fn cmd_play(kit: Option<PathBuf>, port: Option<usize>, device: Option<usize>) -> Result<()> {
+    // If all three are provided, go straight to play
+    if let (Some(kit_path), Some(port_idx), Some(dev_idx)) = (&kit, port, device) {
+        return cmd_play_direct(kit_path.clone(), port_idx, dev_idx);
+    }
+
+    // Run the interactive setup TUI for any missing values
+    match setup::run_setup(kit, device, port)? {
+        setup::SetupResult::Selected {
+            kit_path,
+            audio_device,
+            midi_port,
+        } => cmd_play_direct(kit_path, midi_port, audio_device),
+        setup::SetupResult::Cancelled => Ok(()),
+    }
+}
+
+fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize) -> Result<()> {
+    // Start capturing stderr before any device enumeration (ALSA noise)
+    let capture = setup::StderrCapture::start();
+
+    let loaded_kit = kit::load_kit(&kit_path)?;
+
+    // Print summary before entering TUI (visible in normal screen buffer)
+    kit::print_summary(&loaded_kit);
+
+    // Pre-compute fade durations in frames
+    let choke_fade = (loaded_kit.sample_rate as f64 * 0.068) as usize; // 68ms hi-hat choke
+    let aftertouch_fade = (loaded_kit.sample_rate as f64 * 0.085) as usize; // 85ms cymbal grab
+
+    // Set up rtrb ring buffer for MIDI→audio communication (128 to handle choke bursts)
+    let (producer, consumer) = rtrb::RingBuffer::new(128);
+
+    // Wrap producer in Arc<Mutex<Option>> so it can be swapped during audio device switches
+    let shared_producer = Arc::new(Mutex::new(Some(producer)));
+
+    // Start persistent audio output stream
+    let stream = audio::run_output_stream(Some(audio_device), consumer, loaded_kit.sample_rate, loaded_kit.channels)?;
+
+    // Look up MIDI device name for TUI display
+    let midi_device_name = midi::list_devices()?
+        .into_iter()
+        .find(|d| d.port_index == port_index)
+        .map(|d| d.name)
+        .unwrap_or_else(|| format!("MIDI port {}", port_index));
+
+    // Wrap kit notes in ArcSwap for lock-free hot-reload
+    let shared_notes = Arc::new(ArcSwap::from_pointee(loaded_kit.notes));
+
+    // Unified TUI event channel
+    let (tui_tx, tui_rx) = mpsc::channel::<tui::TuiEvent>();
+
+    // Connect MIDI using the shared producer
+    let connection = midi::connect_callback(
+        port_index,
+        build_midi_callback(
+            Arc::clone(&shared_producer),
+            Arc::clone(&shared_notes),
+            tui_tx.clone(),
+            choke_fade,
+            aftertouch_fade,
+        ),
+    )?;
 
     // Set up filesystem watcher for hot-reload
     let (watch_tx, watch_rx) = mpsc::channel();
@@ -511,58 +499,111 @@ fn cmd_play(kit_path: PathBuf, port: Option<usize>, device: Option<usize>) -> Re
     let stream_sample_rate = loaded_kit.sample_rate;
     let stream_channels = loaded_kit.channels;
 
-    println!();
-    println!(
-        "{}",
-        format!("Listening on: {}", devices[port_index].name)
-            .with(style::Color::Green)
-    );
-    println!(
-        "{}",
-        format!("Watching: {}", kit_path.display())
-            .with(style::Color::Yellow)
-    );
-    println!(
-        "{}",
-        "Hit your pads! Press Ctrl+C to quit."
-            .with(style::Color::DarkGrey)
-    );
+    // Spawn debounce thread for hot-reload
+    let debounce_shared_notes = Arc::clone(&shared_notes);
+    let debounce_kit_path = kit_path.clone();
+    let debounce_tui_tx = tui_tx.clone();
+    std::thread::spawn(move || {
+        let debounce = Duration::from_millis(500);
+        let mut last_event: Option<Instant> = None;
 
-    // Debounced file-watch loop (replaces thread::park)
-    let debounce = Duration::from_millis(500);
-    let mut last_event: Option<Instant> = None;
-
-    loop {
-        let timeout = match last_event {
-            Some(t) => {
-                let elapsed = t.elapsed();
-                if elapsed >= debounce {
-                    // Quiet period passed — reload now
-                    reload_kit(&kit_path, stream_sample_rate, stream_channels, &shared_notes);
-                    last_event = None;
-                    continue;
+        loop {
+            let timeout = match last_event {
+                Some(t) => {
+                    let elapsed = t.elapsed();
+                    if elapsed >= debounce {
+                        // Quiet period passed — reload now
+                        match kit::load_kit(&debounce_kit_path) {
+                            Ok(new_kit) => {
+                                if new_kit.sample_rate != stream_sample_rate {
+                                    let _ = debounce_tui_tx.send(tui::TuiEvent::KitReloadError(
+                                        format!(
+                                            "sample rate mismatch (expected {} Hz, got {} Hz)",
+                                            stream_sample_rate, new_kit.sample_rate
+                                        ),
+                                    ));
+                                } else if new_kit.channels != stream_channels {
+                                    let _ = debounce_tui_tx.send(tui::TuiEvent::KitReloadError(
+                                        format!(
+                                            "channel count mismatch (expected {}, got {})",
+                                            stream_channels, new_kit.channels
+                                        ),
+                                    ));
+                                } else {
+                                    let note_keys = kit::note_keys(&new_kit.notes);
+                                    debounce_shared_notes.store(Arc::new(new_kit.notes));
+                                    let _ = debounce_tui_tx
+                                        .send(tui::TuiEvent::KitReloaded { note_keys });
+                                }
+                            }
+                            Err(e) => {
+                                let _ = debounce_tui_tx
+                                    .send(tui::TuiEvent::KitReloadError(format!("{}", e)));
+                            }
+                        }
+                        last_event = None;
+                        continue;
+                    }
+                    debounce - elapsed
                 }
-                debounce - elapsed
-            }
-            None => Duration::from_secs(3600), // sleep until next event
-        };
+                None => Duration::from_secs(3600),
+            };
 
-        match watch_rx.recv_timeout(timeout) {
-            Ok(()) => {
-                // Drain any extra events that arrived
-                while watch_rx.try_recv().is_ok() {}
-                last_event = Some(Instant::now());
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Debounce timer expired — handled at top of loop
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                break;
+            match watch_rx.recv_timeout(timeout) {
+                Ok(()) => {
+                    while watch_rx.try_recv().is_ok() {}
+                    last_event = Some(Instant::now());
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
+    });
+
+    // Drain initial stderr capture into log lines
+    let mut initial_log = Vec::new();
+    if let Some(ref cap) = capture {
+        cap.drain_into(&mut initial_log);
     }
 
-    Ok(())
+    // Extract stderr receiver from capture (keep saved_fd for restore after TUI)
+    let stderr_rx = capture.as_ref().map(|_| {
+        // We pass the whole capture's rx through PlayResources;
+        // the TUI will drain it each tick
+    });
+    let _ = stderr_rx; // placeholder — we pass capture directly
+
+    // Build TUI state and run
+    let note_keys = kit::note_keys(&shared_notes.load());
+    let state = tui::AppState::new(
+        loaded_kit.name,
+        midi_device_name,
+        stream_sample_rate,
+        stream_channels,
+        &note_keys,
+        initial_log,
+    );
+
+    let resources = tui::PlayResources {
+        stream,
+        connection,
+        producer: shared_producer,
+        shared_notes,
+        kit_path,
+        sample_rate: stream_sample_rate,
+        channels: stream_channels,
+        audio_device_index: audio_device,
+        midi_port_index: port_index,
+        tui_tx: tui_tx.clone(),
+        choke_fade,
+        aftertouch_fade,
+        watcher,
+        stderr_capture: capture,
+    };
+
+    let result = tui::run(tui_rx, state, resources);
+
+    result
 }
 
 fn main() -> Result<()> {

@@ -82,6 +82,17 @@ impl MidiMessage {
     }
 }
 
+/// Directed hi-hat choke rules: when `note` is triggered, these notes get choked.
+/// Closing chokes open (hierarchical), but not vice versa.
+pub fn choke_targets(note: u8) -> &'static [u8] {
+    match note {
+        42 => &[46, 23, 21], // Closed HH chokes Open, Half-Open, Splash
+        44 => &[46, 23, 21], // Pedal HH chokes Open, Half-Open, Splash
+        23 => &[46],         // Half-Open chokes Open only
+        _ => &[],
+    }
+}
+
 /// Map MIDI note numbers to General MIDI drum names
 pub fn drum_name(note: u8) -> &'static str {
     match note {
