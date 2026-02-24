@@ -17,15 +17,16 @@ clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 anyhow = "1"
 cpal = "0.15"
-hound = "3.5"
 rtrb = "0.3"
 arc-swap = "1"
 notify = "7"
 ratatui = "0.29"
 libc = "0.2"
+symphonia = { version = "0.5.5", features = ["aac", "alac", "flac", "mp3", "ogg", "pcm", "wav", "isomp4", "mkv"] }
 
 [dev-dependencies]
 tempfile = "3"
+hound = "3.5"
 
 [profile.release]
 opt-level = 3

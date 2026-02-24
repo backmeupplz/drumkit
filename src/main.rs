@@ -266,7 +266,7 @@ fn cmd_audio_devices() -> Result<()> {
 
 fn cmd_test_sound(file: PathBuf, device: Option<usize>) -> Result<()> {
     let device = resolve_audio_device(device)?;
-    let data = sample::load_wav(&file)?;
+    let data = sample::load_audio(&file)?;
     println!(
         "Loaded: {} ({} Hz, {} ch, {:.2}s)",
         file.display(),
@@ -284,7 +284,7 @@ fn cmd_test_sound(file: PathBuf, device: Option<usize>) -> Result<()> {
 
 fn cmd_test_trigger(file: PathBuf, note: u8, port: Option<usize>, device: Option<usize>) -> Result<()> {
     let device = resolve_audio_device(device)?;
-    let data = sample::load_wav(&file)?;
+    let data = sample::load_audio(&file)?;
     let duration_s = data.samples.len() as f64 / (data.sample_rate as f64 * data.channels as f64);
     println!(
         "Loaded: {} ({} Hz, {} ch, {:.2}s)",

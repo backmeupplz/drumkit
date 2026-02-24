@@ -1,10 +1,21 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::sample;
+
+/// Supported audio file extensions (Symphonia-backed).
+const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "flac", "ogg", "aac", "m4a"];
+
+/// Check whether the given file extension is a supported audio format.
+fn is_audio_file(ext: &OsStr) -> bool {
+    AUDIO_EXTENSIONS
+        .iter()
+        .any(|&e| ext.eq_ignore_ascii_case(e))
+}
 
 /// Metadata extracted from a sample filename.
 #[derive(Debug, PartialEq)]
@@ -14,14 +25,16 @@ pub struct SampleFileInfo {
     pub round_robin: Option<u8>,
 }
 
-/// Parse a WAV sample filename into note number and optional v/rr metadata.
+/// Parse an audio sample filename into note number and optional v/rr metadata.
 ///
 /// Supported formats:
 ///   `36.wav`           → note=36
-///   `38_v1_rr1.wav`    → note=38, v=1, rr=1
-///   `38_v2_rr3.wav`    → note=38, v=2, rr=3
+///   `38_v1_rr1.flac`   → note=38, v=1, rr=1
+///   `38_v2_rr3.mp3`    → note=38, v=2, rr=3
 pub fn parse_sample_filename(filename: &str) -> Option<SampleFileInfo> {
-    let stem = filename.strip_suffix(".wav")?;
+    let stem = AUDIO_EXTENSIONS
+        .iter()
+        .find_map(|ext| filename.strip_suffix(&format!(".{ext}")))?;
 
     let parts: Vec<&str> = stem.split('_').collect();
     if parts.is_empty() {
@@ -160,9 +173,136 @@ pub fn print_summary(kit: &Kit) {
     }
 }
 
-/// Load all WAV files from a directory and map them by MIDI note number.
+/// Like `load_kit`, but reports progress via atomic counters so a UI thread
+/// can display a progress bar while loading runs in the background.
+pub fn load_kit_with_progress(
+    path: &Path,
+    progress: &Arc<AtomicUsize>,
+    total: &Arc<AtomicUsize>,
+) -> Result<Kit> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "unnamed".to_string());
+
+    let mut entries: Vec<_> = std::fs::read_dir(path)
+        .with_context(|| format!("Failed to read kit directory: {}", path.display()))?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|ext| is_audio_file(ext))
+        })
+        .collect();
+
+    if entries.is_empty() {
+        anyhow::bail!("No audio files found in {}", path.display());
+    }
+
+    entries.sort_by_key(|e| e.file_name());
+    total.store(entries.len(), Ordering::Relaxed);
+
+    let mut variants_map: HashMap<u8, Vec<SampleVariant>> = HashMap::new();
+    let mut kit_sample_rate: Option<u32> = None;
+    let mut kit_channels: Option<u16> = None;
+
+    for entry in &entries {
+        let file_path = entry.path();
+        let filename = entry.file_name();
+        let filename_str = filename.to_string_lossy();
+
+        let info = match parse_sample_filename(&filename_str) {
+            Some(info) => info,
+            None => {
+                eprintln!("  Skipping {} (cannot parse note number)", filename_str);
+                progress.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+        };
+
+        let data = sample::load_audio(&file_path)
+            .with_context(|| format!("Failed to load {}", file_path.display()))?;
+
+        progress.fetch_add(1, Ordering::Relaxed);
+
+        match kit_sample_rate {
+            None => kit_sample_rate = Some(data.sample_rate),
+            Some(sr) if sr != data.sample_rate => {
+                anyhow::bail!(
+                    "Sample rate mismatch in {}: expected {} Hz, got {} Hz",
+                    filename_str,
+                    sr,
+                    data.sample_rate
+                );
+            }
+            _ => {}
+        }
+
+        match kit_channels {
+            None => kit_channels = Some(data.channels),
+            Some(ch) if ch != data.channels => {
+                anyhow::bail!(
+                    "Channel count mismatch in {}: expected {}, got {}",
+                    filename_str,
+                    ch,
+                    data.channels
+                );
+            }
+            _ => {}
+        }
+
+        let variant = SampleVariant {
+            samples: Arc::new(data.samples),
+            velocity_layer: info.velocity_layer.unwrap_or(1),
+            round_robin: info.round_robin.unwrap_or(1),
+        };
+
+        variants_map.entry(info.note).or_default().push(variant);
+    }
+
+    if variants_map.is_empty() {
+        anyhow::bail!(
+            "No parseable audio filenames in {} (expected e.g. 36.wav, 38_v1_rr1.flac)",
+            path.display()
+        );
+    }
+
+    let sample_rate = kit_sample_rate.unwrap();
+    let channels = kit_channels.unwrap();
+
+    let mut notes: HashMap<u8, Arc<NoteGroup>> = HashMap::new();
+    for (note, mut variants) in variants_map {
+        variants.sort_by(|a, b| {
+            a.velocity_layer
+                .cmp(&b.velocity_layer)
+                .then(a.round_robin.cmp(&b.round_robin))
+        });
+
+        let max_velocity_layer = variants.iter().map(|v| v.velocity_layer).max().unwrap_or(1);
+        let max_round_robin = variants.iter().map(|v| v.round_robin).max().unwrap_or(1);
+
+        notes.insert(
+            note,
+            Arc::new(NoteGroup {
+                variants,
+                max_velocity_layer,
+                max_round_robin,
+                rr_counter: AtomicUsize::new(0),
+            }),
+        );
+    }
+
+    Ok(Kit {
+        name,
+        notes,
+        sample_rate,
+        channels,
+    })
+}
+
+/// Load all audio files from a directory and map them by MIDI note number.
 ///
-/// All WAVs must share the same sample rate and channel count.
+/// All samples must share the same sample rate and channel count.
 /// Files with the same note number are grouped by velocity layer and round-robin.
 pub fn load_kit(path: &Path) -> Result<Kit> {
     let name = path
@@ -176,12 +316,12 @@ pub fn load_kit(path: &Path) -> Result<Kit> {
         .filter(|e| {
             e.path()
                 .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+                .is_some_and(|ext| is_audio_file(ext))
         })
         .collect();
 
     if entries.is_empty() {
-        anyhow::bail!("No WAV files found in {}", path.display());
+        anyhow::bail!("No audio files found in {}", path.display());
     }
 
     // Sort alphabetically for deterministic ordering
@@ -204,7 +344,7 @@ pub fn load_kit(path: &Path) -> Result<Kit> {
             }
         };
 
-        let data = sample::load_wav(&file_path)
+        let data = sample::load_audio(&file_path)
             .with_context(|| format!("Failed to load {}", file_path.display()))?;
 
         // Validate sample rate and channel count consistency
@@ -245,7 +385,7 @@ pub fn load_kit(path: &Path) -> Result<Kit> {
 
     if variants_map.is_empty() {
         anyhow::bail!(
-            "No parseable WAV filenames in {} (expected e.g. 36.wav, 38_v1_rr1.wav)",
+            "No parseable audio filenames in {} (expected e.g. 36.wav, 38_v1_rr1.flac)",
             path.display()
         );
     }
@@ -340,6 +480,25 @@ mod tests {
     #[test]
     fn parse_wrong_extension() {
         assert!(parse_sample_filename("readme.txt").is_none());
+    }
+
+    #[test]
+    fn parse_other_audio_extensions() {
+        let info = parse_sample_filename("36.flac").unwrap();
+        assert_eq!(info.note, 36);
+
+        let info = parse_sample_filename("38_v1_rr1.mp3").unwrap();
+        assert_eq!(info.note, 38);
+        assert_eq!(info.velocity_layer, Some(1));
+
+        let info = parse_sample_filename("42.ogg").unwrap();
+        assert_eq!(info.note, 42);
+
+        let info = parse_sample_filename("44.m4a").unwrap();
+        assert_eq!(info.note, 44);
+
+        let info = parse_sample_filename("46.aac").unwrap();
+        assert_eq!(info.note, 46);
     }
 
     #[test]
