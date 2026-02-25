@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>drumkit — Low-latency TUI MIDI drum sampler</title>
+  <meta name="description" content="Low-latency TUI MIDI drum sampler for electronic drum kits on Linux, macOS, and Windows. Sub-6ms latency, velocity layers, round-robin, hot-reload.">
+  <!-- Open Graph -->
+  <meta property="og:title" content="drumkit — Low-latency TUI MIDI drum sampler">
+  <meta property="og:description" content="Connect your e-drums via USB and trigger custom audio samples with sub-6ms latency. No DAW, no config files — just drop WAV files and play.">
+  <meta property="og:image" content="https://backmeupplz.github.io/drumkit/og-image.png">
+  <meta property="og:url" content="https://backmeupplz.github.io/drumkit/">
+  <meta property="og:type" content="website">
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="drumkit — Low-latency TUI MIDI drum sampler">
+  <meta name="twitter:description" content="Connect your e-drums via USB and trigger custom audio samples with sub-6ms latency. No DAW, no config files — just drop WAV files and play.">
+  <meta name="twitter:image" content="https://backmeupplz.github.io/drumkit/og-image.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsify-themeable@0.9.0/dist/css/theme-simple-dark.css">
+  <style>
+    :root {
+      --cover-background-color: #1a1a2e;
+      --cover-background-image: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      --cover-heading-color: #e2e8f0;
+      --cover-color: #cbd5e1;
+      --cover-blockquote-color: #94a3b8;
+      --cover-button-primary-color: #0f3460;
+      --cover-button-color: #e2e8f0;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">Loading...</div>
+  <script>
+    window.$docsify = {
+      name: 'drumkit',
+      repo: 'backmeupplz/drumkit',
+      homepage: 'README.md',
+      coverpage: '_coverpage.md',
+      onlyCover: false,
+      loadSidebar: false,
+      subMaxLevel: 3,
+      auto2top: true,
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify@4/lib/docsify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify-copy-code@2/dist/docsify-copy-code.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-toml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-powershell.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-rust.min.js"></script>
+</body>
+</html>
