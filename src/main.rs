@@ -12,11 +12,14 @@ use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
 use clap::{Parser, Subcommand};
 use crossterm::style::{self, Stylize};
+use include_dir::{include_dir, Dir};
 use notify::Watcher;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
+
+static BUILTIN_KIT: Dir = include_dir!("$CARGO_MANIFEST_DIR/kits/freepats-gm");
 
 #[derive(Parser)]
 #[command(name = "drumkit")]
@@ -381,7 +384,37 @@ fn cmd_test_trigger(file: PathBuf, note: u8, port: Option<usize>, device: Option
     Ok(())
 }
 
+/// Extract the embedded freepats-gm kit to the default kits directory if it
+/// doesn't already exist.  Silently skips on any error (permissions, etc.).
+fn install_builtin_kit() {
+    let target = if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+        PathBuf::from(xdg).join("drumkit/kits/freepats-gm")
+    } else if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join(".local/share/drumkit/kits/freepats-gm")
+    } else {
+        return;
+    };
+
+    if target.exists() {
+        return;
+    }
+
+    if std::fs::create_dir_all(&target).is_err() {
+        return;
+    }
+
+    for file in BUILTIN_KIT.files() {
+        let dest = target.join(file.path());
+        // Ensure parent directories exist (in case of nested structure)
+        if let Some(parent) = dest.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(dest, file.contents());
+    }
+}
+
 fn cmd_play(kit: Option<PathBuf>, port: Option<usize>, device: Option<usize>, kits_dirs: Vec<PathBuf>) -> Result<()> {
+    install_builtin_kit();
     // Load persisted settings and merge extra directories from settings + CLI
     let saved = settings::load_settings();
     let mut all_kit_dirs = saved.extra_kit_dirs.clone();
