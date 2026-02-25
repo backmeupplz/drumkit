@@ -1,6 +1,6 @@
 # drumkit
 
-Low-latency TUI MIDI drum sampler for electronic drum kits on Linux and macOS.
+Low-latency TUI MIDI drum sampler for electronic drum kits on Linux, macOS, and Windows.
 
 Connect your e-drums (Alesis Nitro Max, Roland, Yamaha, etc.) via USB and trigger custom audio samples with sub-6ms latency. No DAW, no configuration files — just drop WAV files into a folder and play.
 
@@ -49,6 +49,28 @@ sudo apt install drumkit
 yay -S drumkit
 ```
 
+### From GitHub Releases (Windows)
+
+Download the latest `drumkit-windows-x86_64.zip` from [Releases](https://github.com/backmeupplz/drumkit/releases), extract it, and run it from the terminal:
+
+```powershell
+# Navigate to the folder where you extracted the zip
+cd C:\Users\YourName\Downloads\drumkit-windows-x86_64
+
+# Run drumkit
+.\drumkit.exe play
+```
+
+To make `drumkit` available from anywhere, add the folder to your PATH:
+
+1. Press **Win + R**, type `sysdm.cpl`, press Enter
+2. Go to **Advanced** → **Environment Variables**
+3. Under **User variables**, select **Path**, click **Edit**
+4. Click **New** and add the folder path (e.g. `C:\Users\YourName\Programs\drumkit`)
+5. Click **OK**, then restart your terminal
+
+Now you can run `drumkit play` from any directory.
+
 ### From source
 
 ```
@@ -62,6 +84,7 @@ cargo install --path .
 - Rust 1.75+
 - **Linux:** ALSA development libraries: `sudo pacman -S alsa-lib` (Arch) or `sudo apt install libasound2-dev` (Debian/Ubuntu)
 - **macOS:** No additional dependencies — CoreAudio and CoreMIDI are provided by the system
+- **Windows:** No additional dependencies — WASAPI and Windows MIDI are provided by the system
 
 ### Sample kits
 
@@ -237,8 +260,8 @@ Repos are persisted in `~/.config/drumkit/settings.toml` and scanned every time 
 [Filesystem Watcher]  →  [Main Thread / TUI]  →  sample reload
 ```
 
-- MIDI input via `midir` (ALSA/JACK on Linux, CoreMIDI on macOS)
-- Audio output via `cpal` (ALSA/PipeWire on Linux, CoreAudio on macOS)
+- MIDI input via `midir` (ALSA/JACK on Linux, CoreMIDI on macOS, Windows MIDI on Windows)
+- Audio output via `cpal` (ALSA/PipeWire on Linux, CoreAudio on macOS, WASAPI on Windows)
 - Lock-free SPSC ring buffer between threads (`rtrb`)
 - Samples pre-decoded to f32 PCM in RAM
 - Zero allocations on the audio thread
