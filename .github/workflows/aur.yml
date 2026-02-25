@@ -78,16 +78,11 @@ jobs:
       - name: Push to AUR
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          GIT_SSH_COMMAND: "ssh -v -i ~/.ssh/aur -o StrictHostKeyChecking=no"
+          GIT_SSH_COMMAND: "ssh -i ~/.ssh/aur -o StrictHostKeyChecking=no"
         run: |
           mkdir -p ~/.ssh
           echo "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
           chmod 600 ~/.ssh/aur
-
-          # Debug: verify key was written correctly
-          file ~/.ssh/aur
-          wc -l ~/.ssh/aur
-          ssh-keygen -l -f ~/.ssh/aur || true
 
           git clone ssh://aur@aur.archlinux.org/drumkit.git aur-repo
           cp PKGBUILD aur-repo/PKGBUILD
