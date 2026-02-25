@@ -6,8 +6,9 @@ use std::io;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
+use super::list_nav::first_selectable;
 use super::{popups, render, AppState, PlayResources, Popup, TuiEvent};
-use crate::{audio, kit, mapping, midi, settings};
+use crate::{audio, download, kit, mapping, midi, settings};
 
 pub(super) fn event_loop(
     terminal: &mut Terminal<ratatui::backend::CrosstermBackend<io::Stdout>>,
@@ -23,7 +24,8 @@ pub(super) fn event_loop(
 
         let extra_kit_dirs = &resources.extra_kits_dirs;
         let extra_mapping_dirs = &resources.extra_mapping_dirs;
-        terminal.draw(|frame| render::ui(frame, state, extra_kit_dirs, extra_mapping_dirs))?;
+        let kit_repos = &resources.kit_repos;
+        terminal.draw(|frame| render::ui(frame, state, extra_kit_dirs, extra_mapping_dirs, kit_repos))?;
 
         if state.should_quit {
             return Ok(());
@@ -108,6 +110,17 @@ pub(super) fn event_loop(
                             });
                         }
                     }
+                    KeyCode::Char('s') => {
+                        state.popup = Some(Popup::KitStoreFetching);
+                        let tx = resources.tui_tx.clone();
+                        let dirs = resources.extra_kits_dirs.clone();
+                        let repos = resources.kit_repos.clone();
+                        std::thread::spawn(move || {
+                            let result = download::fetch_kit_list(&repos, &dirs)
+                                .map_err(|e| e.to_string());
+                            let _ = tx.send(TuiEvent::KitStoreFetched { result });
+                        });
+                    }
                     _ => {}
                 }
             }
@@ -135,6 +148,53 @@ pub(super) fn event_loop(
                     let new_mapping = Arc::new(new_mapping);
                     state.mapping = new_mapping;
                     state.update_hit_log_names();
+                }
+                TuiEvent::KitStoreFetched { result } => {
+                    let is_fetching = matches!(&state.popup, Some(Popup::KitStoreFetching));
+                    if !is_fetching {
+                        continue;
+                    }
+                    match result {
+                        Ok(kits) => {
+                            let rows = download::build_store_rows(&kits);
+                            let mut list_state = ListState::default();
+                            let first = first_selectable(rows.len(), |i| matches!(rows[i], download::StoreRow::Kit(_)));
+                            list_state.select(first);
+                            state.popup = Some(Popup::KitStore { kits, rows, list_state });
+                        }
+                        Err(e) => {
+                            state.set_status(format!("Kit store error: {}", e));
+                            state.popup = None;
+                        }
+                    }
+                }
+                TuiEvent::KitDownloadComplete { result, kit_name } => {
+                    let is_downloading = matches!(
+                        &state.popup,
+                        Some(Popup::KitDownloading { kit_name: n, .. }) if *n == kit_name
+                    );
+                    if !is_downloading {
+                        continue;
+                    }
+                    match result {
+                        Ok(_path) => {
+                            state.set_status(format!("Downloaded: {}", kit_name));
+                            // Re-fetch store list to update installed markers
+                            state.popup = Some(Popup::KitStoreFetching);
+                            let tx = resources.tui_tx.clone();
+                            let dirs = resources.extra_kits_dirs.clone();
+                            let repos = resources.kit_repos.clone();
+                            std::thread::spawn(move || {
+                                let result = download::fetch_kit_list(&repos, &dirs)
+                                    .map_err(|e| e.to_string());
+                                let _ = tx.send(TuiEvent::KitStoreFetched { result });
+                            });
+                        }
+                        Err(e) => {
+                            state.set_status(format!("Download failed: {}", e));
+                            state.popup = None;
+                        }
+                    }
                 }
                 TuiEvent::KitLoadComplete { result, path, name } => {
                     // Only process if we're still showing the Loading popup for this kit

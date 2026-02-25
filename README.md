@@ -13,6 +13,7 @@ Connect your e-drums (Alesis Nitro Max, Roland, Yamaha, etc.) via USB and trigge
 - **Velocity layers** — `38_v1.wav`, `38_v2.wav` for dynamic expression across the velocity range
 - **Round-robin** — `38_v1_rr1.wav`, `38_v1_rr2.wav` to cycle through variations and avoid the machine-gun effect
 - **Hot-reload** — edit samples while playing, changes load automatically with zero downtime
+- **Built-in Kit Store** — press `s` to browse and download kits from GitHub repositories, grouped by repo with progress tracking. Add your own repos with `r`
 - **On-the-fly kit switching** — press `k` to browse and switch kits instantly, no restart needed
 - **On-the-fly device switching** — press `a` to switch audio output devices and `m` to switch MIDI inputs without restarting
 - **Note mappings** — built-in General MIDI and Alesis Nitro Max presets, per-kit `mapping.toml` support, user-created mappings, and live note renaming
@@ -51,7 +52,7 @@ yay -S drumkit
 ### From source
 
 ```
-git clone --recursive https://github.com/backmeupplz/drumkit.git
+git clone https://github.com/backmeupplz/drumkit.git
 cd drumkit
 cargo install --path .
 ```
@@ -64,15 +65,9 @@ cargo install --path .
 
 ### Sample kits
 
-Sample kits (FreePats GM) live in a [separate repo](https://github.com/backmeupplz/drumkit-kits) to keep the main repo light — binary WAV files bloat git history. They're included as a git submodule at `./kits/`.
+Sample kits are available from the built-in **Kit Store** — press `s` during the setup flow or in play mode to browse and download kits from the [drumkit-kits repository](https://github.com/backmeupplz/drumkit-kits). Downloaded kits are saved to `~/.local/share/drumkit/kits/`.
 
-If you cloned without `--recursive`, pull the kits with:
-
-```bash
-git submodule update --init
-```
-
-drumkit will find them automatically in `./kits/` at startup.
+You can also add custom kit repositories — press `r` inside the Kit Store to manage repos. See [Creating a Kit Repository](#creating-a-kit-repository) for details.
 
 ## Quick Start
 
@@ -97,7 +92,8 @@ drumkit play --kits-dir /path/to/samples --kits-dir /another/path
 
 | Key | Action |
 |-----|--------|
-| `k` | **Kit picker** — browse and switch between discovered kits |
+| `k` | **Kit picker** — browse and switch between discovered kits (`s` inside to open store) |
+| `s` | **Kit Store** — browse and download kits from configured repositories (`r` to manage repos) |
 | `n` | **Mapping picker** — switch note name mappings (General MIDI, Alesis, user-created, or kit-bundled) |
 | `r` | **Rename note** — rename the most recently hit pad (creates a user mapping if editing a built-in) |
 | `d` | **Directory manager** — browse kit and mapping directories, add new ones (`a`/`A`), or remove user-added ones (`Del`) |
@@ -112,7 +108,6 @@ All selections (kit, audio device, MIDI input) are saved to `~/.config/drumkit/s
 
 drumkit searches for kits in these directories:
 
-- `./kits/`
 - `$XDG_DATA_HOME/drumkit/kits/` (usually `~/.local/share/drumkit/kits/`)
 - Any directories added via `--kits-dir` or the `d` directory manager
 
@@ -197,6 +192,43 @@ name = "My Kit"
 | 57 | Crash 2 |
 | 51 | Ride |
 
+## Creating a Kit Repository
+
+Anyone can create a GitHub repository that works as a kit source for drumkit's Kit Store. The repo just needs to follow a simple folder structure:
+
+```
+your-drumkit-kits/
+├── My-Rock-Kit/
+│   ├── 36.wav
+│   ├── 38_v1_rr1.wav
+│   ├── 38_v1_rr2.wav
+│   ├── 42.wav
+│   ├── 46.wav
+│   └── mapping.toml       # optional
+├── Electronic-Kit/
+│   ├── 36.wav
+│   ├── 38.wav
+│   └── ...
+└── README.md               # optional, ignored by drumkit
+```
+
+**Requirements:**
+
+- Each top-level directory is treated as a kit
+- Kits contain audio files following the [naming convention](#naming-convention) (`{note}[_v{layer}][_rr{robin}].wav`)
+- Files at the repo root (like `README.md`) are ignored
+- The repo must have a `main` branch
+- Supported formats: WAV, FLAC, OGG, MP3
+
+**Adding your repo to drumkit:**
+
+1. Press `s` to open the Kit Store
+2. Press `r` to open the repo manager
+3. Press `a` and enter your repo in `owner/repo` format (e.g. `myuser/my-drumkit-kits`)
+4. Press `Esc` to go back — your kits will appear in the store alongside the default ones
+
+Repos are persisted in `~/.config/drumkit/settings.toml` and scanned every time you open the Kit Store.
+
 ## Architecture
 
 ```
@@ -234,8 +266,7 @@ This brings PipeWire's buffer down to ~1.3ms. Combined with drumkit's lock-free 
 ## Contributing
 
 ```bash
-# Clone with sample kits
-git clone --recursive https://github.com/backmeupplz/drumkit.git
+git clone https://github.com/backmeupplz/drumkit.git
 cd drumkit
 
 # Build in debug mode
@@ -260,6 +291,7 @@ The codebase is a single Rust crate:
 | `audio.rs` | Audio output stream, voice mixing |
 | `midi.rs` | MIDI input, callback routing |
 | `kit.rs` | Kit loading, velocity/round-robin grouping |
+| `download.rs` | Kit Store — GitHub API fetching and kit downloading |
 | `mapping.rs` | Note name mappings, choke groups, TOML parsing |
 | `settings.rs` | Persisted user settings (kit, devices, directories) |
 | `setup.rs` | Interactive setup flow |

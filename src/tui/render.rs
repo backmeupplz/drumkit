@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use super::{render_popups, AppState, PadState, FLASH_DURATION_MS};
 
-pub(super) fn ui(frame: &mut Frame, state: &AppState, extra_kit_dirs: &[PathBuf], extra_mapping_dirs: &[PathBuf]) {
+pub(super) fn ui(frame: &mut Frame, state: &AppState, extra_kit_dirs: &[PathBuf], extra_mapping_dirs: &[PathBuf], kit_repos: &[String]) {
     let area = frame.area();
 
     if area.height < 3 || area.width < 15 {
@@ -37,7 +37,7 @@ pub(super) fn ui(frame: &mut Frame, state: &AppState, extra_kit_dirs: &[PathBuf]
 
     // Popup overlay
     if let Some(ref popup) = state.popup {
-        render_popups::render_popup(frame, area, popup, state, extra_kit_dirs, extra_mapping_dirs);
+        render_popups::render_popup(frame, area, popup, state, extra_kit_dirs, extra_mapping_dirs, kit_repos);
     }
 }
 
@@ -399,7 +399,7 @@ fn render_shortcuts(frame: &mut Frame, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let hints = " l log  k kit  n mapping  r rename  d dirs  a audio  m midi  q quit";
+    let hints = " l log  k kit  s store  n mapping  r rename  d dirs  a audio  m midi  q quit";
     let hint_style = Style::default().fg(Color::DarkGray);
     let line = Line::from(Span::styled(hints, hint_style));
     frame.render_widget(Paragraph::new(line), area);

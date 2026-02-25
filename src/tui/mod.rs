@@ -72,7 +72,7 @@ pub enum Popup {
     DeleteMapping { name: String, path: PathBuf, },
     NoteRename { note: u8, input: String, cursor: usize },
     KitStoreFetching,
-    KitStore { kits: Vec<download::RemoteKit>, list_state: ListState },
+    KitStore { kits: Vec<download::RemoteKit>, rows: Vec<download::StoreRow>, list_state: ListState },
     KitDownloading {
         kit_name: String,
         progress: Arc<AtomicUsize>,
@@ -84,6 +84,7 @@ pub enum Popup {
         input: String,
         cursor: usize,
         error: Option<String>,
+        confirm_delete: bool,
     },
 }
 

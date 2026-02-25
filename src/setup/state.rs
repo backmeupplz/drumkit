@@ -20,11 +20,19 @@ pub(super) enum SetupStep {
 /// Store popup overlay states for the setup flow.
 pub(super) enum SetupStorePopup {
     Fetching,
-    Browse { kits: Vec<download::RemoteKit>, list_state: ListState },
+    Browse { kits: Vec<download::RemoteKit>, rows: Vec<download::StoreRow>, list_state: ListState },
     Downloading {
         kit_name: String,
         progress: Arc<AtomicUsize>,
         total: Arc<AtomicUsize>,
+    },
+    Repos {
+        selected: usize,
+        adding: bool,
+        input: String,
+        cursor: usize,
+        error: Option<String>,
+        confirm_delete: bool,
     },
 }
 

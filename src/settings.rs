@@ -2,6 +2,13 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// The default kit repository included out of the box.
+pub const DEFAULT_KIT_REPO: &str = "backmeupplz/drumkit-kits";
+
+fn default_kit_repos() -> Vec<String> {
+    vec![DEFAULT_KIT_REPO.to_string()]
+}
+
 /// Persisted user settings (last-used kit, audio device, MIDI device, extra directories).
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Settings {
@@ -12,6 +19,8 @@ pub struct Settings {
     pub extra_kit_dirs: Vec<PathBuf>,
     #[serde(default)]
     pub extra_mapping_dirs: Vec<PathBuf>,
+    #[serde(default = "default_kit_repos")]
+    pub kit_repos: Vec<String>,
 }
 
 /// Return the path to the settings file:
@@ -73,6 +82,7 @@ mod tests {
             midi_device: Some("Alesis Nitro Max MIDI 1".to_string()),
             extra_kit_dirs: vec![PathBuf::from("/extra/kits")],
             extra_mapping_dirs: vec![PathBuf::from("/extra/mappings")],
+            kit_repos: default_kit_repos(),
         };
 
         // Save manually to temp path

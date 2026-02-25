@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use super::input::handle_text_input_key;
-use super::list_nav::{index_down, index_up, list_down, list_up};
+use super::list_nav::{index_down, index_up, list_down, list_down_skip, list_up, list_up_skip};
 use super::{AppState, DirPopupMode, PlayResources, Popup, TuiEvent};
 use crate::{audio, download, kit, mapping, midi, settings};
 
@@ -26,6 +26,17 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
         Popup::KitPicker { kits, list_state } => match key {
             KeyCode::Char('k') | KeyCode::Esc => { state.popup = None; }
             KeyCode::Char('q') => { state.popup = None; state.should_quit = true; }
+            KeyCode::Char('s') => {
+                state.popup = Some(Popup::KitStoreFetching);
+                let tx = resources.tui_tx.clone();
+                let dirs = resources.extra_kits_dirs.clone();
+                let repos = resources.kit_repos.clone();
+                std::thread::spawn(move || {
+                    let result = download::fetch_kit_list(&repos, &dirs)
+                        .map_err(|e| e.to_string());
+                    let _ = tx.send(TuiEvent::KitStoreFetched { result });
+                });
+            }
             KeyCode::Up => list_up(list_state, kits.len()),
             KeyCode::Down => list_down(list_state, kits.len()),
             KeyCode::Enter => {
@@ -259,7 +270,7 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
             KeyCode::Char('q') => { state.popup = None; state.should_quit = true; }
             _ => {}
         },
-        Popup::KitStore { kits, list_state } => match key {
+        Popup::KitStore { kits, rows, list_state } => match key {
             KeyCode::Esc | KeyCode::Char('s') => { state.popup = None; }
             KeyCode::Char('q') => { state.popup = None; state.should_quit = true; }
             KeyCode::Char('r') => {
@@ -269,13 +280,16 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
                     input: String::new(),
                     cursor: 0,
                     error: None,
+                    confirm_delete: false,
                 });
             }
-            KeyCode::Up => list_up(list_state, kits.len()),
-            KeyCode::Down => list_down(list_state, kits.len()),
+            KeyCode::Up => list_up_skip(list_state, rows.len(), |i| matches!(rows[i], download::StoreRow::Kit(_))),
+            KeyCode::Down => list_down_skip(list_state, rows.len(), |i| matches!(rows[i], download::StoreRow::Kit(_))),
             KeyCode::Enter => {
                 if kits.is_empty() { return; }
-                if let Some(idx) = list_state.selected() {
+                if let Some(sel) = list_state.selected()
+                    && let download::StoreRow::Kit(idx) = rows[sel]
+                {
                     if kits[idx].installed {
                         return;
                     }
@@ -340,27 +354,31 @@ fn handle_kit_store_repos_key(state: &mut AppState, resources: &mut PlayResource
                 }
             }
             KeyCode::Enter => {
-                let repo = if let Some(Popup::KitStoreRepos { input, .. }) = &state.popup {
-                    input.trim().to_string()
+                let raw = if let Some(Popup::KitStoreRepos { input, .. }) = &state.popup {
+                    input.clone()
                 } else {
                     return;
                 };
-                if repo.is_empty() || !repo.contains('/') {
-                    if let Some(Popup::KitStoreRepos { error, .. }) = &mut state.popup {
-                        *error = Some("Format: owner/repo".to_string());
+                match download::normalize_repo_input(&raw) {
+                    None => {
+                        if let Some(Popup::KitStoreRepos { error, .. }) = &mut state.popup {
+                            *error = Some("Format: owner/repo".to_string());
+                        }
                     }
-                } else if resources.kit_repos.contains(&repo) {
-                    if let Some(Popup::KitStoreRepos { error, .. }) = &mut state.popup {
-                        *error = Some("Already added".to_string());
+                    Some(repo) if resources.kit_repos.contains(&repo) => {
+                        if let Some(Popup::KitStoreRepos { error, .. }) = &mut state.popup {
+                            *error = Some("Already added".to_string());
+                        }
                     }
-                } else {
-                    resources.kit_repos.push(repo);
-                    save_repo_settings(resources);
-                    if let Some(Popup::KitStoreRepos { adding, input, cursor, error, .. }) = &mut state.popup {
-                        *adding = false;
-                        input.clear();
-                        *cursor = 0;
-                        *error = None;
+                    Some(repo) => {
+                        resources.kit_repos.push(repo);
+                        save_repo_settings(resources);
+                        if let Some(Popup::KitStoreRepos { adding, input, cursor, error, .. }) = &mut state.popup {
+                            *adding = false;
+                            input.clear();
+                            *cursor = 0;
+                            *error = None;
+                        }
                     }
                 }
             }
@@ -371,6 +389,47 @@ fn handle_kit_store_repos_key(state: &mut AppState, resources: &mut PlayResource
             }
         }
     } else {
+        // Check if we're in confirm_delete mode
+        let is_confirming = matches!(
+            &state.popup,
+            Some(Popup::KitStoreRepos { confirm_delete: true, .. })
+        );
+
+        if is_confirming {
+            match key {
+                KeyCode::Char('d') | KeyCode::Delete => {
+                    // Confirmed: actually delete
+                    let sel = if let Some(Popup::KitStoreRepos { selected, .. }) = &state.popup {
+                        *selected
+                    } else {
+                        return;
+                    };
+                    let len = resources.kit_repos.len();
+                    if len > 0 && sel < len {
+                        let removed = resources.kit_repos.remove(sel);
+                        save_repo_settings(resources);
+                        state.set_status(format!("Removed repo: {}", removed));
+                        let new_len = resources.kit_repos.len();
+                        if let Some(Popup::KitStoreRepos { selected, confirm_delete, .. }) = &mut state.popup {
+                            *confirm_delete = false;
+                            if new_len == 0 {
+                                *selected = 0;
+                            } else if *selected >= new_len {
+                                *selected = new_len - 1;
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    // Cancel confirmation
+                    if let Some(Popup::KitStoreRepos { confirm_delete, .. }) = &mut state.popup {
+                        *confirm_delete = false;
+                    }
+                }
+            }
+            return;
+        }
+
         match key {
             KeyCode::Esc => {
                 state.popup = Some(Popup::KitStoreFetching);
@@ -410,18 +469,9 @@ fn handle_kit_store_repos_key(state: &mut AppState, resources: &mut PlayResource
                 } else {
                     return;
                 };
-                let len = resources.kit_repos.len();
-                if len > 0 && sel < len {
-                    let removed = resources.kit_repos.remove(sel);
-                    save_repo_settings(resources);
-                    state.set_status(format!("Removed repo: {}", removed));
-                    let new_len = resources.kit_repos.len();
-                    if let Some(Popup::KitStoreRepos { selected, .. }) = &mut state.popup {
-                        if new_len == 0 {
-                            *selected = 0;
-                        } else if *selected >= new_len {
-                            *selected = new_len - 1;
-                        }
+                if !resources.kit_repos.is_empty() && sel < resources.kit_repos.len() {
+                    if let Some(Popup::KitStoreRepos { confirm_delete, .. }) = &mut state.popup {
+                        *confirm_delete = true;
                     }
                 }
             }

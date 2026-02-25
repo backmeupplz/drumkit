@@ -6,8 +6,9 @@ use std::time::Duration;
 use super::render::setup_ui;
 use super::state::{SetupBgEvent, SetupState, SetupStep, SetupStorePopup};
 use super::SetupResult;
-use crate::tui::list_nav::{list_down, list_up};
-use crate::{audio, download, kit, midi};
+use crate::tui::input::handle_text_input_key;
+use crate::tui::list_nav::{first_selectable, index_down, index_up, list_down, list_down_skip, list_up, list_up_skip};
+use crate::{audio, download, kit, midi, settings};
 use crate::stderr::StderrCapture;
 
 use std::sync::atomic::AtomicUsize;
@@ -37,11 +38,11 @@ pub(super) fn setup_event_loop(
                     }
                     match result {
                         Ok(kits) => {
+                            let rows = download::build_store_rows(&kits);
                             let mut list_state = ListState::default();
-                            if !kits.is_empty() {
-                                list_state.select(Some(0));
-                            }
-                            state.store_popup = Some(SetupStorePopup::Browse { kits, list_state });
+                            let first = first_selectable(rows.len(), |i| matches!(rows[i], download::StoreRow::Kit(_)));
+                            list_state.select(first);
+                            state.store_popup = Some(SetupStorePopup::Browse { kits, rows, list_state });
                         }
                         Err(e) => {
                             state.error_message = Some(format!("Kit store error: {}", e));
@@ -201,14 +202,26 @@ pub(super) fn handle_store_popup_key(
             KeyCode::Char('q') => { state.store_popup = None; state.should_quit = true; }
             _ => {}
         },
-        Some(SetupStorePopup::Browse { kits, list_state }) => match key {
+        Some(SetupStorePopup::Browse { kits, rows, list_state }) => match key {
             KeyCode::Esc | KeyCode::Char('s') => { state.store_popup = None; }
             KeyCode::Char('q') => { state.store_popup = None; state.should_quit = true; }
-            KeyCode::Up => list_up(list_state, kits.len()),
-            KeyCode::Down => list_down(list_state, kits.len()),
+            KeyCode::Char('r') => {
+                state.store_popup = Some(SetupStorePopup::Repos {
+                    selected: 0,
+                    adding: false,
+                    input: String::new(),
+                    cursor: 0,
+                    error: None,
+                    confirm_delete: false,
+                });
+            }
+            KeyCode::Up => list_up_skip(list_state, rows.len(), |i| matches!(rows[i], download::StoreRow::Kit(_))),
+            KeyCode::Down => list_down_skip(list_state, rows.len(), |i| matches!(rows[i], download::StoreRow::Kit(_))),
             KeyCode::Enter => {
                 if kits.is_empty() { return; }
-                if let Some(idx) = list_state.selected() {
+                if let Some(sel) = list_state.selected()
+                    && let download::StoreRow::Kit(idx) = rows[sel]
+                {
                     if kits[idx].installed { return; }
                     let kit_name = kits[idx].name.clone();
                     let kit_repo = kits[idx].repo.clone();
@@ -242,7 +255,163 @@ pub(super) fn handle_store_popup_key(
             KeyCode::Char('q') => { state.store_popup = None; state.should_quit = true; }
             _ => {}
         },
+        Some(SetupStorePopup::Repos { .. }) => {
+            handle_repos_popup_key(state, bg_tx, key);
+        }
         None => {}
+    }
+}
+
+fn save_setup_repo_settings(state: &SetupState) {
+    let mut s = settings::load_settings();
+    s.kit_repos = state.kit_repos.clone();
+    let _ = settings::save_settings(&s);
+}
+
+fn handle_repos_popup_key(
+    state: &mut SetupState,
+    bg_tx: &mpsc::Sender<SetupBgEvent>,
+    key: KeyCode,
+) {
+    let is_adding = matches!(
+        &state.store_popup,
+        Some(SetupStorePopup::Repos { adding: true, .. })
+    );
+
+    if is_adding {
+        match key {
+            KeyCode::Esc => {
+                if let Some(SetupStorePopup::Repos { adding, input, cursor, error, .. }) = &mut state.store_popup {
+                    *adding = false;
+                    input.clear();
+                    *cursor = 0;
+                    *error = None;
+                }
+            }
+            KeyCode::Enter => {
+                let raw = if let Some(SetupStorePopup::Repos { input, .. }) = &state.store_popup {
+                    input.clone()
+                } else {
+                    return;
+                };
+                match download::normalize_repo_input(&raw) {
+                    None => {
+                        if let Some(SetupStorePopup::Repos { error, .. }) = &mut state.store_popup {
+                            *error = Some("Format: owner/repo".to_string());
+                        }
+                    }
+                    Some(repo) if state.kit_repos.contains(&repo) => {
+                        if let Some(SetupStorePopup::Repos { error, .. }) = &mut state.store_popup {
+                            *error = Some("Already added".to_string());
+                        }
+                    }
+                    Some(repo) => {
+                        state.kit_repos.push(repo);
+                        save_setup_repo_settings(state);
+                        if let Some(SetupStorePopup::Repos { adding, input, cursor, error, .. }) = &mut state.store_popup {
+                            *adding = false;
+                            input.clear();
+                            *cursor = 0;
+                            *error = None;
+                        }
+                    }
+                }
+            }
+            other => {
+                if let Some(SetupStorePopup::Repos { input, cursor, error, .. }) = &mut state.store_popup {
+                    handle_text_input_key(input, cursor, Some(error), other);
+                }
+            }
+        }
+    } else {
+        // Check if we're in confirm_delete mode
+        let is_confirming = matches!(
+            &state.store_popup,
+            Some(SetupStorePopup::Repos { confirm_delete: true, .. })
+        );
+
+        if is_confirming {
+            match key {
+                KeyCode::Char('d') | KeyCode::Delete => {
+                    // Confirmed: actually delete
+                    let sel = if let Some(SetupStorePopup::Repos { selected, .. }) = &state.store_popup {
+                        *selected
+                    } else {
+                        return;
+                    };
+                    let len = state.kit_repos.len();
+                    if len > 0 && sel < len {
+                        state.kit_repos.remove(sel);
+                        save_setup_repo_settings(state);
+                        let new_len = state.kit_repos.len();
+                        if let Some(SetupStorePopup::Repos { selected, confirm_delete, .. }) = &mut state.store_popup {
+                            *confirm_delete = false;
+                            if new_len == 0 {
+                                *selected = 0;
+                            } else if *selected >= new_len {
+                                *selected = new_len - 1;
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    // Cancel confirmation
+                    if let Some(SetupStorePopup::Repos { confirm_delete, .. }) = &mut state.store_popup {
+                        *confirm_delete = false;
+                    }
+                }
+            }
+            return;
+        }
+
+        match key {
+            KeyCode::Esc => {
+                // Go back to store: re-fetch kit list
+                state.store_popup = Some(SetupStorePopup::Fetching);
+                let tx = bg_tx.clone();
+                let dirs = state.extra_kits_dirs.clone();
+                let repos = state.kit_repos.clone();
+                std::thread::spawn(move || {
+                    let result = download::fetch_kit_list(&repos, &dirs)
+                        .map_err(|e| e.to_string());
+                    let _ = tx.send(SetupBgEvent::StoreFetched(result));
+                });
+            }
+            KeyCode::Char('q') => { state.store_popup = None; state.should_quit = true; }
+            KeyCode::Char('a') => {
+                if let Some(SetupStorePopup::Repos { adding, input, cursor, error, .. }) = &mut state.store_popup {
+                    *adding = true;
+                    input.clear();
+                    *cursor = 0;
+                    *error = None;
+                }
+            }
+            KeyCode::Up => {
+                let len = state.kit_repos.len();
+                if let Some(SetupStorePopup::Repos { selected, .. }) = &mut state.store_popup {
+                    index_up(selected, len);
+                }
+            }
+            KeyCode::Down => {
+                let len = state.kit_repos.len();
+                if let Some(SetupStorePopup::Repos { selected, .. }) = &mut state.store_popup {
+                    index_down(selected, len);
+                }
+            }
+            KeyCode::Delete | KeyCode::Char('d') => {
+                let sel = if let Some(SetupStorePopup::Repos { selected, .. }) = &state.store_popup {
+                    *selected
+                } else {
+                    return;
+                };
+                if !state.kit_repos.is_empty() && sel < state.kit_repos.len() {
+                    if let Some(SetupStorePopup::Repos { confirm_delete, .. }) = &mut state.store_popup {
+                        *confirm_delete = true;
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }
 

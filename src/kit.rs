@@ -338,7 +338,7 @@ pub struct DiscoveredKit {
 
 /// Return the built-in search directories (for display purposes).
 pub fn default_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = vec![PathBuf::from("./kits")];
+    let mut dirs = Vec::new();
     if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
         dirs.push(PathBuf::from(xdg).join("drumkit/kits"));
     } else if let Ok(home) = std::env::var("HOME") {
@@ -352,7 +352,7 @@ pub fn discover_kits(extra_dirs: &[PathBuf]) -> Vec<DiscoveredKit> {
     let mut kits = Vec::new();
     let mut seen_paths = std::collections::HashSet::new();
 
-    let mut search_dirs = vec![PathBuf::from("./kits")];
+    let mut search_dirs = Vec::new();
 
     // XDG_DATA_HOME or ~/.local/share
     if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {

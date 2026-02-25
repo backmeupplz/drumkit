@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use super::state::{SetupState, SetupStep, SetupStorePopup};
 use crate::tui::widgets::{
     content_footer_split, popup_area_fixed, popup_area_percent, render_footer_hint,
-    render_progress_popup, styled_block,
+    render_progress_popup, render_text_input, styled_block,
 };
 use crate::download;
 
@@ -64,7 +64,7 @@ pub(super) fn setup_ui(frame: &mut Frame, state: &SetupState) {
 
     // Store popup overlay
     if let Some(ref store) = state.store_popup {
-        render_store_popup(frame, area, store);
+        render_store_popup(frame, area, store, state);
     }
 }
 
@@ -199,10 +199,6 @@ fn render_kit_list(frame: &mut Frame, area: Rect, state: &SetupState) {
             Line::from(""),
             Line::from(Span::styled(
                 "Or place WAV files in a subdirectory of:",
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(Span::styled(
-                "  ./kits/<kit-name>/",
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(Span::styled(
@@ -411,7 +407,7 @@ fn render_setup_footer(frame: &mut Frame, area: Rect, state: &SetupState) {
     frame.render_widget(Paragraph::new(Line::from(hints)), area);
 }
 
-fn render_store_popup(frame: &mut Frame, area: Rect, store: &SetupStorePopup) {
+fn render_store_popup(frame: &mut Frame, area: Rect, store: &SetupStorePopup, state: &SetupState) {
     match store {
         SetupStorePopup::Fetching => {
             let popup = popup_area_fixed(area, 40, 5);
@@ -434,7 +430,7 @@ fn render_store_popup(frame: &mut Frame, area: Rect, store: &SetupStorePopup) {
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
-        SetupStorePopup::Browse { kits, list_state } => {
+        SetupStorePopup::Browse { kits, rows, list_state } => {
             let popup = popup_area_percent(area);
             frame.render_widget(Clear, popup);
 
@@ -455,28 +451,37 @@ fn render_store_popup(frame: &mut Frame, area: Rect, store: &SetupStorePopup) {
                 )));
                 frame.render_widget(msg, content_area);
             } else {
-                let items: Vec<ListItem> = kits
+                let items: Vec<ListItem> = rows
                     .iter()
-                    .map(|kit| {
-                        let mut spans = vec![Span::raw(" ")];
-                        if kit.installed {
-                            spans.push(Span::styled(
-                                "\u{2713} ",
-                                Style::default().fg(Color::Green),
-                            ));
-                        } else {
-                            spans.push(Span::raw("  "));
+                    .map(|row| match row {
+                        download::StoreRow::RepoHeader(repo) => {
+                            ListItem::new(Line::from(Span::styled(
+                                format!(" \u{2500}\u{2500} {} \u{2500}\u{2500}", repo),
+                                Style::default().fg(Color::DarkGray),
+                            )))
                         }
-                        spans.push(Span::raw(&kit.name));
-                        spans.push(Span::styled(
-                            format!(
-                                "  ({} files, {})",
-                                kit.file_count,
-                                download::format_size(kit.total_bytes),
-                            ),
-                            Style::default().fg(Color::DarkGray),
-                        ));
-                        ListItem::new(Line::from(spans))
+                        download::StoreRow::Kit(idx) => {
+                            let kit = &kits[*idx];
+                            let mut spans = vec![Span::raw(" ")];
+                            if kit.installed {
+                                spans.push(Span::styled(
+                                    "\u{2713} ",
+                                    Style::default().fg(Color::Green),
+                                ));
+                            } else {
+                                spans.push(Span::raw("  "));
+                            }
+                            spans.push(Span::raw(&kit.name));
+                            spans.push(Span::styled(
+                                format!(
+                                    "  ({} files, {})",
+                                    kit.file_count,
+                                    download::format_size(kit.total_bytes),
+                                ),
+                                Style::default().fg(Color::DarkGray),
+                            ));
+                            ListItem::new(Line::from(spans))
+                        }
                     })
                     .collect();
 
@@ -488,7 +493,7 @@ fn render_store_popup(frame: &mut Frame, area: Rect, store: &SetupStorePopup) {
                 frame.render_stateful_widget(list, content_area, &mut ls);
             }
 
-            render_footer_hint(frame, footer_area, " \u{2191}\u{2193} navigate  Enter download  Esc/s close  q quit");
+            render_footer_hint(frame, footer_area, " \u{2191}\u{2193} navigate  Enter download  r repos  Esc/s close  q quit");
         }
         SetupStorePopup::Downloading { kit_name, progress, total } => {
             let cur = progress.load(Ordering::Relaxed);
@@ -502,6 +507,99 @@ fn render_store_popup(frame: &mut Frame, area: Rect, store: &SetupStorePopup) {
                 frame, area, " Downloading Kit ", kit_name, &status, cur, tot,
                 Color::Cyan, "Esc cancel  q quit",
             );
+        }
+        SetupStorePopup::Repos { selected, adding, input, cursor, error, confirm_delete } => {
+            render_repos_popup(frame, area, &state.kit_repos, *selected, *adding, input, *cursor, error.as_deref(), *confirm_delete);
+        }
+    }
+}
+
+fn render_repos_popup(
+    frame: &mut Frame,
+    area: Rect,
+    kit_repos: &[String],
+    selected: usize,
+    adding: bool,
+    input: &str,
+    cursor: usize,
+    error: Option<&str>,
+    confirm_delete: bool,
+) {
+    let popup = popup_area_percent(area);
+    frame.render_widget(Clear, popup);
+
+    let block = styled_block(" Kit Repos ", Color::Yellow);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    if inner.height < 3 || inner.width < 10 {
+        return;
+    }
+
+    if adding {
+        let label = Paragraph::new(Line::from(Span::styled(
+            " Enter repo (e.g. backmeupplz/drumkit-kits):",
+            Style::default().fg(Color::White),
+        )));
+        frame.render_widget(label, Rect::new(inner.x, inner.y, inner.width, 1));
+
+        render_text_input(
+            frame,
+            Rect::new(inner.x, inner.y + 1, inner.width, 1),
+            input,
+            cursor,
+            Color::Yellow,
+        );
+
+        if let Some(err) = error {
+            let err_area = Rect::new(inner.x, inner.y + 2, inner.width, 1);
+            let err_line = Paragraph::new(Line::from(Span::styled(
+                format!(" {}", err),
+                Style::default().fg(Color::Red),
+            )));
+            frame.render_widget(err_line, err_area);
+        }
+
+        let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
+        render_footer_hint(frame, footer_area, " Enter add  Esc back");
+    } else {
+        let (content_area, footer_area) = content_footer_split(inner);
+
+        if kit_repos.is_empty() {
+            let msg = Paragraph::new(Line::from(Span::styled(
+                " No repos configured. Press a to add one.",
+                Style::default().fg(Color::DarkGray),
+            )));
+            frame.render_widget(msg, content_area);
+        } else {
+            let mut lines: Vec<Line> = Vec::new();
+            for (i, repo) in kit_repos.iter().enumerate() {
+                let is_selected = i == selected;
+                let prefix = if is_selected { " \u{25b8} " } else { "   " };
+                let style = if is_selected {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("{}{}", prefix, repo),
+                    style,
+                )));
+            }
+            if confirm_delete && selected < kit_repos.len() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    format!(" Remove \"{}\"? Press d again to confirm.", kit_repos[selected]),
+                    Style::default().fg(Color::Red),
+                )));
+            }
+            frame.render_widget(Paragraph::new(lines), content_area);
+        }
+
+        if confirm_delete {
+            render_footer_hint(frame, footer_area, " d confirm remove  any other key cancel");
+        } else {
+            render_footer_hint(frame, footer_area, " a add  d/Del remove  Esc back  q quit");
         }
     }
 }
