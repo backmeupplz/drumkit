@@ -1,6 +1,6 @@
 [package]
 name = "drumkit"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 authors = ["backmeupplz"]
 description = "Low-latency TUI MIDI drum sampler for electronic drum kits on Linux and macOS"
