@@ -2,17 +2,21 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Clear, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use super::widgets::{
+    content_footer_split, popup_area_fixed, popup_area_percent, render_footer_hint,
+    render_progress_popup, render_text_input, styled_block,
+};
 use super::{AppState, DirPopupMode, Popup};
-use crate::{audio, kit, mapping, midi};
+use crate::{audio, download, kit, mapping, midi};
 
-pub(super) fn render_popup(frame: &mut Frame, area: Rect, popup: &Popup, state: &AppState, extra_kit_dirs: &[PathBuf], extra_mapping_dirs: &[PathBuf]) {
+pub(super) fn render_popup(frame: &mut Frame, area: Rect, popup: &Popup, state: &AppState, extra_kit_dirs: &[PathBuf], extra_mapping_dirs: &[PathBuf], kit_repos: &[String]) {
     match popup {
         Popup::Log { scroll } => render_log_popup(frame, area, state, *scroll),
         Popup::KitPicker { kits, list_state } => render_kit_popup(frame, area, kits, list_state),
@@ -23,28 +27,19 @@ pub(super) fn render_popup(frame: &mut Frame, area: Rect, popup: &Popup, state: 
         Popup::MappingPicker { mappings, list_state } => render_mapping_popup(frame, area, mappings, list_state, state),
         Popup::DeleteMapping { name, .. } => render_delete_mapping_popup(frame, area, name),
         Popup::NoteRename { note, input, cursor } => render_note_rename_popup(frame, area, *note, input, *cursor),
+        Popup::KitStoreFetching => render_kit_store_fetching(frame, area),
+        Popup::KitStore { kits, list_state } => render_kit_store(frame, area, kits, list_state),
+        Popup::KitDownloading { kit_name, progress, total } => render_kit_downloading(frame, area, kit_name, progress, total),
+        Popup::KitStoreRepos { selected, adding, input, cursor, error } => render_kit_store_repos(frame, area, kit_repos, *selected, *adding, input, *cursor, error.as_deref()),
     }
 }
 
-fn popup_area(area: Rect) -> Rect {
-    let popup_w = (area.width * 4 / 5).max(30).min(area.width);
-    let popup_h = (area.height * 4 / 5).max(6).min(area.height);
-    let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-    let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-    Rect::new(x, y, popup_w, popup_h)
-}
-
 fn render_log_popup(frame: &mut Frame, area: Rect, state: &AppState, scroll: usize) {
-    let popup = popup_area(area);
+    let popup = popup_area_percent(area);
     frame.render_widget(Clear, popup);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Yellow))
-        .title(format!(" Log ({} lines) ", state.log_lines.len()))
-        .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-
+    let title = format!(" Log ({} lines) ", state.log_lines.len());
+    let block = styled_block(&title, Color::Yellow);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -52,8 +47,7 @@ fn render_log_popup(frame: &mut Frame, area: Rect, state: &AppState, scroll: usi
         return;
     }
 
-    let content_area = Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1));
-    let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
+    let (content_area, footer_area) = content_footer_split(inner);
 
     if state.log_lines.is_empty() {
         let msg = Paragraph::new(Line::from(Span::styled(
@@ -75,24 +69,14 @@ fn render_log_popup(frame: &mut Frame, area: Rect, state: &AppState, scroll: usi
         frame.render_widget(paragraph, content_area);
     }
 
-    let footer = Paragraph::new(Line::from(Span::styled(
-        " \u{2191}\u{2193} scroll  Esc/l close  q quit",
-        Style::default().fg(Color::DarkGray),
-    )));
-    frame.render_widget(footer, footer_area);
+    render_footer_hint(frame, footer_area, " \u{2191}\u{2193} scroll  Esc/l close  q quit");
 }
 
 fn render_kit_popup(frame: &mut Frame, area: Rect, kits: &[kit::DiscoveredKit], list_state: &ListState) {
-    let popup = popup_area(area);
+    let popup = popup_area_percent(area);
     frame.render_widget(Clear, popup);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(" Select Kit ")
-        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
-
+    let block = styled_block(" Select Kit ", Color::Cyan);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -100,8 +84,7 @@ fn render_kit_popup(frame: &mut Frame, area: Rect, kits: &[kit::DiscoveredKit], 
         return;
     }
 
-    let content_area = Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1));
-    let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
+    let (content_area, footer_area) = content_footer_split(inner);
 
     if kits.is_empty() {
         let msg = Paragraph::new(Line::from(Span::styled(
@@ -132,24 +115,14 @@ fn render_kit_popup(frame: &mut Frame, area: Rect, kits: &[kit::DiscoveredKit], 
         frame.render_stateful_widget(list, content_area, &mut ls);
     }
 
-    let footer = Paragraph::new(Line::from(Span::styled(
-        " \u{2191}\u{2193} navigate  Enter select  Esc/k close  q quit",
-        Style::default().fg(Color::DarkGray),
-    )));
-    frame.render_widget(footer, footer_area);
+    render_footer_hint(frame, footer_area, " \u{2191}\u{2193} navigate  Enter select  Esc/k close  q quit");
 }
 
 fn render_audio_popup(frame: &mut Frame, area: Rect, devices: &[audio::AudioDevice], list_state: &ListState) {
-    let popup = popup_area(area);
+    let popup = popup_area_percent(area);
     frame.render_widget(Clear, popup);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Green))
-        .title(" Select Audio Device ")
-        .title_style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD));
-
+    let block = styled_block(" Select Audio Device ", Color::Green);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -157,8 +130,7 @@ fn render_audio_popup(frame: &mut Frame, area: Rect, devices: &[audio::AudioDevi
         return;
     }
 
-    let content_area = Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1));
-    let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
+    let (content_area, footer_area) = content_footer_split(inner);
 
     if devices.is_empty() {
         let msg = Paragraph::new(Line::from(Span::styled(
@@ -180,24 +152,14 @@ fn render_audio_popup(frame: &mut Frame, area: Rect, devices: &[audio::AudioDevi
         frame.render_stateful_widget(list, content_area, &mut ls);
     }
 
-    let footer = Paragraph::new(Line::from(Span::styled(
-        " \u{2191}\u{2193} navigate  Enter select  Esc/a close  q quit",
-        Style::default().fg(Color::DarkGray),
-    )));
-    frame.render_widget(footer, footer_area);
+    render_footer_hint(frame, footer_area, " \u{2191}\u{2193} navigate  Enter select  Esc/a close  q quit");
 }
 
 fn render_midi_popup(frame: &mut Frame, area: Rect, devices: &[midi::MidiDevice], list_state: &ListState) {
-    let popup = popup_area(area);
+    let popup = popup_area_percent(area);
     frame.render_widget(Clear, popup);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Magenta))
-        .title(" Select MIDI Input ")
-        .title_style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD));
-
+    let block = styled_block(" Select MIDI Input ", Color::Magenta);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -205,8 +167,7 @@ fn render_midi_popup(frame: &mut Frame, area: Rect, devices: &[midi::MidiDevice]
         return;
     }
 
-    let content_area = Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1));
-    let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
+    let (content_area, footer_area) = content_footer_split(inner);
 
     if devices.is_empty() {
         let msg = Paragraph::new(Line::from(Span::styled(
@@ -228,11 +189,7 @@ fn render_midi_popup(frame: &mut Frame, area: Rect, devices: &[midi::MidiDevice]
         frame.render_stateful_widget(list, content_area, &mut ls);
     }
 
-    let footer = Paragraph::new(Line::from(Span::styled(
-        " \u{2191}\u{2193} navigate  Enter select  Esc/m close  q quit",
-        Style::default().fg(Color::DarkGray),
-    )));
-    frame.render_widget(footer, footer_area);
+    render_footer_hint(frame, footer_area, " \u{2191}\u{2193} navigate  Enter select  Esc/m close  q quit");
 }
 
 fn render_mapping_popup(
@@ -242,16 +199,10 @@ fn render_mapping_popup(
     list_state: &ListState,
     state: &AppState,
 ) {
-    let popup = popup_area(area);
+    let popup = popup_area_percent(area);
     frame.render_widget(Clear, popup);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Yellow))
-        .title(" Select Mapping ")
-        .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-
+    let block = styled_block(" Select Mapping ", Color::Yellow);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -297,41 +248,23 @@ fn render_mapping_popup(
     }
 
     let mappings_dir = mapping::user_mappings_dir();
-    let path_hint = Paragraph::new(Line::from(Span::styled(
-        format!(" User: {}", mappings_dir.display()),
-        Style::default().fg(Color::DarkGray),
-    )));
-    frame.render_widget(path_hint, path_area);
-
-    let footer = Paragraph::new(Line::from(Span::styled(
-        " \u{2191}\u{2193} navigate  Enter select  d delete  Esc/n close  q quit",
-        Style::default().fg(Color::DarkGray),
-    )));
-    frame.render_widget(footer, footer_area);
+    render_footer_hint(frame, path_area, &format!(" User: {}", mappings_dir.display()));
+    render_footer_hint(frame, footer_area, " \u{2191}\u{2193} navigate  Enter select  d delete  Esc/n close  q quit");
 }
 
 fn render_delete_mapping_popup(frame: &mut Frame, area: Rect, name: &str) {
-    let popup_w: u16 = 50.min(area.width.saturating_sub(2));
-    let popup_h: u16 = 7.min(area.height.saturating_sub(2));
-    let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-    let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-    let popup = Rect::new(x, y, popup_w, popup_h);
-
+    let popup = popup_area_fixed(area, 50, 7);
     frame.render_widget(Clear, popup);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Red))
-        .title(" Delete Mapping ")
-        .title_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD));
-
+    let block = styled_block(" Delete Mapping ", Color::Red);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
     if inner.height < 3 || inner.width < 10 {
         return;
     }
+
+    let (content_area, footer_area) = content_footer_split(inner);
 
     let msg = Paragraph::new(vec![
         Line::from(""),
@@ -340,13 +273,9 @@ fn render_delete_mapping_popup(frame: &mut Frame, area: Rect, name: &str) {
             Style::default().fg(Color::White),
         )),
     ]);
-    frame.render_widget(msg, Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1)));
+    frame.render_widget(msg, content_area);
 
-    let footer = Paragraph::new(Line::from(Span::styled(
-        " y/Enter confirm  any other key cancel",
-        Style::default().fg(Color::DarkGray),
-    )));
-    frame.render_widget(footer, Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1));
+    render_footer_hint(frame, footer_area, " y/Enter confirm  any other key cancel");
 }
 
 fn render_note_rename_popup(
@@ -356,21 +285,11 @@ fn render_note_rename_popup(
     input: &str,
     cursor: usize,
 ) {
-    let popup_w: u16 = 40.min(area.width.saturating_sub(2));
-    let popup_h: u16 = 7.min(area.height.saturating_sub(2));
-    let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-    let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-    let popup = Rect::new(x, y, popup_w, popup_h);
-
+    let popup = popup_area_fixed(area, 40, 7);
     frame.render_widget(Clear, popup);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Yellow))
-        .title(format!(" Rename Note {} ", note))
-        .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-
+    let title = format!(" Rename Note {} ", note);
+    let block = styled_block(&title, Color::Yellow);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -383,47 +302,21 @@ fn render_note_rename_popup(
         " Enter name for this note:",
         Style::default().fg(Color::White),
     )));
-    let label_area = Rect::new(inner.x, inner.y, inner.width, 1);
-    frame.render_widget(label, label_area);
+    frame.render_widget(label, Rect::new(inner.x, inner.y, inner.width, 1));
 
     // Input line with cursor
-    let input_area = Rect::new(inner.x, inner.y + 1, inner.width, 1);
-    let w = inner.width as usize;
-    let display_input = if input.len() + 3 > w {
-        let start = cursor.saturating_sub(w.saturating_sub(4));
-        &input[start..]
-    } else {
-        input
-    };
-    let cursor_in_display = cursor.min(display_input.len());
-
-    let before = &display_input[..cursor_in_display];
-    let cursor_char = display_input.get(cursor_in_display..cursor_in_display + 1).unwrap_or(" ");
-    let after = if cursor_in_display + 1 <= display_input.len() {
-        &display_input[cursor_in_display + 1..]
-    } else {
-        ""
-    };
-
-    let input_line = Line::from(vec![
-        Span::styled(" > ", Style::default().fg(Color::Yellow)),
-        Span::raw(before),
-        Span::styled(
-            cursor_char,
-            Style::default().fg(Color::Black).bg(Color::White),
-        ),
-        Span::raw(after),
-    ]);
-    frame.render_widget(Paragraph::new(input_line), input_area);
+    render_text_input(
+        frame,
+        Rect::new(inner.x, inner.y + 1, inner.width, 1),
+        input,
+        cursor,
+        Color::Yellow,
+    );
 
     // Footer
     if inner.height >= 3 {
         let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
-        let footer = Paragraph::new(Line::from(Span::styled(
-            " Enter save  Esc cancel",
-            Style::default().fg(Color::DarkGray),
-        )));
-        frame.render_widget(footer, footer_area);
+        render_footer_hint(frame, footer_area, " Enter save  Esc cancel");
     }
 }
 
@@ -434,90 +327,17 @@ fn render_loading_popup(
     progress: &Arc<AtomicUsize>,
     total: &Arc<AtomicUsize>,
 ) {
-    let popup_w: u16 = 36.min(area.width.saturating_sub(2));
-    let popup_h: u16 = 7.min(area.height.saturating_sub(2));
-    let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-    let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-    let popup = Rect::new(x, y, popup_w, popup_h);
-
-    frame.render_widget(Clear, popup);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(" Loading Kit ")
-        .title_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
-
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-
-    if inner.height < 3 || inner.width < 10 {
-        return;
-    }
-
     let cur = progress.load(Ordering::Relaxed);
     let tot = total.load(Ordering::Relaxed);
-
-    // Line 1: kit name
-    let name_w = inner.width as usize;
-    let display_name = if kit_name.len() > name_w {
-        &kit_name[..name_w]
+    let status = if tot == 0 {
+        "Scanning...".to_string()
     } else {
-        kit_name
+        format!("Loading... {}/{} files", cur, tot)
     };
-
-    // Line 2: progress text
-    let progress_text = if tot == 0 {
-        " Scanning...".to_string()
-    } else {
-        format!(" Loading... {}/{} files", cur, tot)
-    };
-
-    // Line 3: progress bar
-    let bar_w = (inner.width as usize).saturating_sub(2);
-    let (filled, empty) = if tot == 0 || bar_w == 0 {
-        (0, bar_w)
-    } else {
-        let f = (cur * bar_w) / tot;
-        (f.min(bar_w), bar_w.saturating_sub(f))
-    };
-
-    let mut lines = vec![
-        Line::from(Span::styled(
-            format!(" {}", display_name),
-            Style::default().fg(Color::White),
-        )),
-        Line::from(Span::styled(
-            progress_text,
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(vec![
-            Span::raw(" "),
-            Span::styled(
-                "\u{2588}".repeat(filled),
-                Style::default().fg(Color::Cyan),
-            ),
-            Span::styled(
-                "\u{2591}".repeat(empty),
-                Style::default().fg(Color::Rgb(50, 50, 60)),
-            ),
-        ]),
-    ];
-
-    // Line 4: footer hints (if space permits)
-    if inner.height >= 4 {
-        lines.push(Line::from(Span::styled(
-            " Esc cancel  q quit",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-
-    frame.render_widget(Paragraph::new(lines), inner);
+    render_progress_popup(
+        frame, area, " Loading Kit ", kit_name, &status, cur, tot,
+        Color::Cyan, "Esc cancel  q quit",
+    );
 }
 
 fn render_library_dir_popup(
@@ -531,7 +351,7 @@ fn render_library_dir_popup(
     extra_kit_dirs: &[PathBuf],
     extra_mapping_dirs: &[PathBuf],
 ) {
-    let popup = popup_area(area);
+    let popup = popup_area_percent(area);
     frame.render_widget(Clear, popup);
 
     let title = match mode {
@@ -540,13 +360,7 @@ fn render_library_dir_popup(
         DirPopupMode::AddMapping => " Add Mapping Directory ",
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Yellow))
-        .title(title)
-        .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-
+    let block = styled_block(title, Color::Yellow);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -571,8 +385,7 @@ fn render_browse_mode(
     extra_kit_dirs: &[PathBuf],
     extra_mapping_dirs: &[PathBuf],
 ) {
-    let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
-    let content_area = Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1));
+    let (content_area, footer_area) = content_footer_split(inner);
 
     let builtin_kit = kit::default_search_dirs();
     let builtin_mapping_dir = mapping::user_mappings_dir();
@@ -639,11 +452,7 @@ fn render_browse_mode(
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, content_area);
 
-    let footer = Paragraph::new(Line::from(Span::styled(
-        " a add kit dir  A add mapping dir  Del remove  Esc close  q quit",
-        Style::default().fg(Color::DarkGray),
-    )));
-    frame.render_widget(footer, footer_area);
+    render_footer_hint(frame, footer_area, " a add kit dir  A add mapping dir  Del remove  Esc close  q quit");
 }
 
 fn render_add_mode(
@@ -658,38 +467,16 @@ fn render_add_mode(
         " Enter directory path:",
         Style::default().fg(Color::White),
     )));
-    let label_area = Rect::new(inner.x, inner.y, inner.width, 1);
-    frame.render_widget(label, label_area);
+    frame.render_widget(label, Rect::new(inner.x, inner.y, inner.width, 1));
 
     // Input line with visible cursor
-    let input_area = Rect::new(inner.x, inner.y + 1, inner.width, 1);
-    let w = inner.width as usize;
-    let display_input = if input.len() + 3 > w {
-        let start = cursor.saturating_sub(w.saturating_sub(4));
-        &input[start..]
-    } else {
-        input
-    };
-    let cursor_in_display = cursor.min(display_input.len());
-
-    let before = &display_input[..cursor_in_display];
-    let cursor_char = display_input.get(cursor_in_display..cursor_in_display + 1).unwrap_or(" ");
-    let after = if cursor_in_display + 1 <= display_input.len() {
-        &display_input[cursor_in_display + 1..]
-    } else {
-        ""
-    };
-
-    let input_line = Line::from(vec![
-        Span::styled(" > ", Style::default().fg(Color::Yellow)),
-        Span::raw(before),
-        Span::styled(
-            cursor_char,
-            Style::default().fg(Color::Black).bg(Color::White),
-        ),
-        Span::raw(after),
-    ]);
-    frame.render_widget(Paragraph::new(input_line), input_area);
+    render_text_input(
+        frame,
+        Rect::new(inner.x, inner.y + 1, inner.width, 1),
+        input,
+        cursor,
+        Color::Yellow,
+    );
 
     // Error line
     if let Some(err) = error {
@@ -703,9 +490,196 @@ fn render_add_mode(
 
     // Footer
     let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
-    let footer = Paragraph::new(Line::from(Span::styled(
-        " Enter add  Esc back",
-        Style::default().fg(Color::DarkGray),
-    )));
-    frame.render_widget(footer, footer_area);
+    render_footer_hint(frame, footer_area, " Enter add  Esc back");
+}
+
+fn render_kit_store_fetching(frame: &mut Frame, area: Rect) {
+    let popup = popup_area_fixed(area, 40, 5);
+    frame.render_widget(Clear, popup);
+
+    let block = styled_block(" Kit Store ", Color::Cyan);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let lines = vec![
+        Line::from(Span::styled(
+            " Fetching kit list...",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            " Esc cancel  q quit",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_kit_store(
+    frame: &mut Frame,
+    area: Rect,
+    kits: &[download::RemoteKit],
+    list_state: &ListState,
+) {
+    let popup = popup_area_percent(area);
+    frame.render_widget(Clear, popup);
+
+    let block = styled_block(" Kit Store ", Color::Cyan);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    if inner.height < 2 || inner.width < 4 {
+        return;
+    }
+
+    let (content_area, footer_area) = content_footer_split(inner);
+
+    if kits.is_empty() {
+        let msg = Paragraph::new(Line::from(Span::styled(
+            " No kits available.",
+            Style::default().fg(Color::Yellow),
+        )));
+        frame.render_widget(msg, content_area);
+    } else {
+        let show_repo = kits.iter().map(|k| &k.repo).collect::<std::collections::HashSet<_>>().len() > 1;
+        let items: Vec<ListItem> = kits
+            .iter()
+            .map(|kit| {
+                let mut spans = vec![Span::raw(" ")];
+                if kit.installed {
+                    spans.push(Span::styled(
+                        "\u{2713} ",
+                        Style::default().fg(Color::Green),
+                    ));
+                } else {
+                    spans.push(Span::raw("  "));
+                }
+                spans.push(Span::raw(&kit.name));
+                spans.push(Span::styled(
+                    format!(
+                        "  ({} files, {})",
+                        kit.file_count,
+                        download::format_size(kit.total_bytes),
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                ));
+                if show_repo {
+                    spans.push(Span::styled(
+                        format!("  [{}]", kit.repo),
+                        Style::default().fg(Color::Rgb(100, 100, 120)),
+                    ));
+                }
+                ListItem::new(Line::from(spans))
+            })
+            .collect();
+
+        let list = List::new(items)
+            .highlight_symbol("\u{25b8} ")
+            .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+
+        let mut ls = list_state.clone();
+        frame.render_stateful_widget(list, content_area, &mut ls);
+    }
+
+    render_footer_hint(frame, footer_area, " \u{2191}\u{2193} navigate  Enter download  r repos  Esc/s close  q quit");
+}
+
+fn render_kit_store_repos(
+    frame: &mut Frame,
+    area: Rect,
+    kit_repos: &[String],
+    selected: usize,
+    adding: bool,
+    input: &str,
+    cursor: usize,
+    error: Option<&str>,
+) {
+    let popup = popup_area_percent(area);
+    frame.render_widget(Clear, popup);
+
+    let block = styled_block(" Kit Repos ", Color::Yellow);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    if inner.height < 3 || inner.width < 10 {
+        return;
+    }
+
+    if adding {
+        // Add mode: show input field
+        let label = Paragraph::new(Line::from(Span::styled(
+            " Enter repo (owner/repo):",
+            Style::default().fg(Color::White),
+        )));
+        frame.render_widget(label, Rect::new(inner.x, inner.y, inner.width, 1));
+
+        render_text_input(
+            frame,
+            Rect::new(inner.x, inner.y + 1, inner.width, 1),
+            input,
+            cursor,
+            Color::Yellow,
+        );
+
+        if let Some(err) = error {
+            let err_area = Rect::new(inner.x, inner.y + 2, inner.width, 1);
+            let err_line = Paragraph::new(Line::from(Span::styled(
+                format!(" {}", err),
+                Style::default().fg(Color::Red),
+            )));
+            frame.render_widget(err_line, err_area);
+        }
+
+        let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
+        render_footer_hint(frame, footer_area, " Enter add  Esc back");
+    } else {
+        // Browse mode: list repos
+        let (content_area, footer_area) = content_footer_split(inner);
+
+        if kit_repos.is_empty() {
+            let msg = Paragraph::new(Line::from(Span::styled(
+                " No repos configured. Press a to add one.",
+                Style::default().fg(Color::DarkGray),
+            )));
+            frame.render_widget(msg, content_area);
+        } else {
+            let mut lines: Vec<Line> = Vec::new();
+            for (i, repo) in kit_repos.iter().enumerate() {
+                let is_selected = i == selected;
+                let prefix = if is_selected { " \u{25b8} " } else { "   " };
+                let style = if is_selected {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("{}{}", prefix, repo),
+                    style,
+                )));
+            }
+            frame.render_widget(Paragraph::new(lines), content_area);
+        }
+
+        render_footer_hint(frame, footer_area, " a add  d/Del remove  Esc back  q quit");
+    }
+}
+
+fn render_kit_downloading(
+    frame: &mut Frame,
+    area: Rect,
+    kit_name: &str,
+    progress: &Arc<AtomicUsize>,
+    total: &Arc<AtomicUsize>,
+) {
+    let cur = progress.load(Ordering::Relaxed);
+    let tot = total.load(Ordering::Relaxed);
+    let status = if tot == 0 {
+        "Preparing...".to_string()
+    } else {
+        format!("Downloading... {}/{} files", cur, tot)
+    };
+    render_progress_popup(
+        frame, area, " Downloading Kit ", kit_name, &status, cur, tot,
+        Color::Cyan, "Esc cancel  q quit",
+    );
 }

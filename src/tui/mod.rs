@@ -1,7 +1,10 @@
 mod event_loop;
+pub(crate) mod input;
+pub(crate) mod list_nav;
 mod popups;
 mod render;
 mod render_popups;
+pub(crate) mod widgets;
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
@@ -17,7 +20,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 
-use crate::{audio, kit, mapping, midi, stderr};
+use crate::{audio, download, kit, mapping, midi, stderr};
 
 /// Events fed into the TUI from various sources.
 pub enum TuiEvent {
@@ -31,6 +34,13 @@ pub enum TuiEvent {
         name: String,
     },
     MappingReloaded(mapping::NoteMapping, PathBuf),
+    KitStoreFetched {
+        result: Result<Vec<download::RemoteKit>, String>,
+    },
+    KitDownloadComplete {
+        result: Result<std::path::PathBuf, String>,
+        kit_name: String,
+    },
 }
 
 /// Mode for the library directory popup.
@@ -61,6 +71,20 @@ pub enum Popup {
     MappingPicker { mappings: Vec<mapping::NoteMapping>, list_state: ListState },
     DeleteMapping { name: String, path: PathBuf, },
     NoteRename { note: u8, input: String, cursor: usize },
+    KitStoreFetching,
+    KitStore { kits: Vec<download::RemoteKit>, list_state: ListState },
+    KitDownloading {
+        kit_name: String,
+        progress: Arc<AtomicUsize>,
+        total: Arc<AtomicUsize>,
+    },
+    KitStoreRepos {
+        selected: usize,
+        adding: bool,
+        input: String,
+        cursor: usize,
+        error: Option<String>,
+    },
 }
 
 /// Swappable resources owned by the TUI event loop during play mode.
@@ -84,6 +108,7 @@ pub struct PlayResources {
     pub extra_kits_dirs: Vec<PathBuf>,
     pub extra_mapping_dirs: Vec<PathBuf>,
     pub shared_mapping: Arc<ArcSwap<mapping::NoteMapping>>,
+    pub kit_repos: Vec<String>,
 }
 
 /// Visual state for a single pad in the grid.
