@@ -72,6 +72,7 @@ jobs:
         run: |
           useradd -m builder
           chown builder PKGBUILD
+          chown builder .
           su builder -c "makepkg --printsrcinfo > .SRCINFO"
 
       - name: Push to AUR
