@@ -80,5 +80,5 @@ jobs:
             debuild -S -sa -d -k"$GPG_KEY"
 
             # Upload to PPA
-            dput ppa:backmeupplz/drumkit "../drumkit_${VERSION}-1${DISTRO}1_source.changes"
+            dput ppa:borodutch/drumkit "../drumkit_${VERSION}-1${DISTRO}1_source.changes"
           done
