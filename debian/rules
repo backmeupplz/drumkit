@@ -1,0 +1,21 @@
+#!/usr/bin/make -f
+
+export CARGO = /usr/bin/cargo-1.85
+export RUSTC = /usr/bin/rustc-1.85
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	mkdir -p .cargo
+	tar xf debian/vendor.tar.xz
+	cp debian/cargo-config.toml .cargo/config.toml
+
+override_dh_auto_build:
+	$(CARGO) build --release --frozen
+
+override_dh_auto_test:
+	@echo "Skipping tests (require audio hardware)"
+
+override_dh_auto_install:
+	install -D -m 0755 target/release/drumkit debian/drumkit/usr/bin/drumkit

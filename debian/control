@@ -1,0 +1,23 @@
+Source: drumkit
+Section: sound
+Priority: optional
+Maintainer: Nikita Kolmogorov <ubuntu@borodutch.com>
+Build-Depends: debhelper-compat (= 13),
+               cargo-1.85,
+               rustc-1.85,
+               libstd-rust-1.85-dev,
+               pkg-config,
+               libasound2-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/backmeupplz/drumkit
+Vcs-Git: https://github.com/backmeupplz/drumkit.git
+Vcs-Browser: https://github.com/backmeupplz/drumkit
+Rules-Requires-Root: no
+
+Package: drumkit
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Low-latency TUI MIDI drum sampler for electronic drum kits
+ drumkit is a terminal-based MIDI drum sampler that provides low-latency
+ audio playback for electronic drum kits. It supports MIDI input mapping,
+ multiple audio sample formats, and a ratatui-based terminal UI.
