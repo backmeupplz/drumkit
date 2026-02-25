@@ -36,6 +36,8 @@ jobs:
       - name: Generate lockfile and vendor dependencies
         run: |
           cargo generate-lockfile
+          # Pin deps to versions compatible with rustc 1.85 (available in Ubuntu repos)
+          cargo update instability@0.3 --precise 0.3.7
           cargo vendor debian/vendor
           tar cJf debian/vendor.tar.xz -C debian vendor
           rm -rf debian/vendor
