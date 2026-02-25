@@ -85,7 +85,7 @@ jobs:
           echo "Host aur.archlinux.org" > ~/.ssh/config
           echo "  IdentityFile ~/.ssh/aur" >> ~/.ssh/config
           echo "  User aur" >> ~/.ssh/config
-          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
+          echo "  StrictHostKeyChecking no" >> ~/.ssh/config
 
           git clone ssh://aur@aur.archlinux.org/drumkit.git aur-repo
           cp PKGBUILD aur-repo/PKGBUILD
