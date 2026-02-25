@@ -1,6 +1,6 @@
 # drumkit
 
-Low-latency TUI MIDI drum sampler for electronic drum kits on Linux.
+Low-latency TUI MIDI drum sampler for electronic drum kits on Linux and macOS.
 
 Connect your e-drums (Alesis Nitro Max, Roland, Yamaha, etc.) via USB and trigger custom audio samples with sub-6ms latency. No DAW, no configuration files — just drop WAV files into a folder and play.
 
@@ -28,6 +28,13 @@ Connect your e-drums (Alesis Nitro Max, Roland, Yamaha, etc.) via USB and trigge
 
 ## Install
 
+### From Homebrew (macOS)
+
+```
+brew tap backmeupplz/drumkit
+brew install drumkit
+```
+
 ### From PPA (Ubuntu/Debian)
 
 ```
@@ -52,7 +59,8 @@ cargo install --path .
 ### Build dependencies
 
 - Rust 1.75+
-- ALSA development libraries: `sudo pacman -S alsa-lib` (Arch) or `sudo apt install libasound2-dev` (Debian/Ubuntu)
+- **Linux:** ALSA development libraries: `sudo pacman -S alsa-lib` (Arch) or `sudo apt install libasound2-dev` (Debian/Ubuntu)
+- **macOS:** No additional dependencies — CoreAudio and CoreMIDI are provided by the system
 
 ### Sample kits
 
@@ -197,8 +205,8 @@ name = "My Kit"
 [Filesystem Watcher]  →  [Main Thread / TUI]  →  sample reload
 ```
 
-- MIDI input via `midir` (ALSA/JACK backends)
-- Audio output via `cpal` (ALSA/PipeWire)
+- MIDI input via `midir` (ALSA/JACK on Linux, CoreMIDI on macOS)
+- Audio output via `cpal` (ALSA/PipeWire on Linux, CoreAudio on macOS)
 - Lock-free SPSC ring buffer between threads (`rtrb`)
 - Samples pre-decoded to f32 PCM in RAM
 - Zero allocations on the audio thread

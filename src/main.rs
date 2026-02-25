@@ -92,8 +92,15 @@ fn cmd_devices() -> Result<()> {
         println!();
         println!("Tips:");
         println!("  - Connect your drum module via USB");
-        println!("  - Check: amidi -l");
-        println!("  - Check: aconnect -l");
+        #[cfg(target_os = "linux")]
+        {
+            println!("  - Check: amidi -l");
+            println!("  - Check: aconnect -l");
+        }
+        #[cfg(target_os = "macos")]
+        {
+            println!("  - Open Audio MIDI Setup.app to verify your device is recognized");
+        }
         return Ok(());
     }
 
