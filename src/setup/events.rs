@@ -23,6 +23,19 @@ pub(super) fn setup_event_loop(
 ) -> Result<SetupResult> {
     let (bg_tx, bg_rx) = mpsc::channel::<SetupBgEvent>();
 
+    // Auto-open Kit Store when no kits are installed (first-run experience)
+    if state.step == SetupStep::Kit && state.kits.is_empty() {
+        state.store_popup = Some(SetupStorePopup::Fetching);
+        let tx = bg_tx.clone();
+        let dirs = state.extra_kits_dirs.clone();
+        let repos = state.kit_repos.clone();
+        std::thread::spawn(move || {
+            let result = download::fetch_kit_list(&repos, &dirs)
+                .map_err(|e| e.to_string());
+            let _ = tx.send(SetupBgEvent::StoreFetched(result));
+        });
+    }
+
     loop {
         // Drain captured stderr lines
         if let Some(cap) = capture {

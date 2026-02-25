@@ -10,7 +10,7 @@ fn default_kit_repos() -> Vec<String> {
 }
 
 /// Persisted user settings (last-used kit, audio device, MIDI device, extra directories).
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Settings {
     pub kit_path: Option<PathBuf>,
     pub audio_device: Option<String>,
@@ -21,6 +21,19 @@ pub struct Settings {
     pub extra_mapping_dirs: Vec<PathBuf>,
     #[serde(default = "default_kit_repos")]
     pub kit_repos: Vec<String>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            kit_path: None,
+            audio_device: None,
+            midi_device: None,
+            extra_kit_dirs: Vec::new(),
+            extra_mapping_dirs: Vec::new(),
+            kit_repos: default_kit_repos(),
+        }
+    }
 }
 
 /// Return the path to the settings file:
