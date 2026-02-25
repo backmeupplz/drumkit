@@ -1,0 +1,97 @@
+name: Publish to AUR
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm git openssh curl base-devel
+
+      - name: Determine version
+        id: version
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download source tarball and compute SHA256
+        id: sha
+        run: |
+          curl -fSL -o source.tar.gz "https://github.com/backmeupplz/drumkit/archive/refs/tags/${{ github.event.release.tag_name }}.tar.gz"
+          SHA256=$(sha256sum source.tar.gz | awk '{print $1}')
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Generate PKGBUILD
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          SHA256="${{ steps.sha.outputs.sha256 }}"
+          cat > PKGBUILD << 'EOF'
+          # Maintainer: Nikita Kolmogorov <ubuntu@borodutch.com>
+          pkgname=drumkit
+          pkgver=__VERSION__
+          pkgrel=1
+          pkgdesc='Low-latency TUI MIDI drum sampler for electronic drum kits'
+          arch=('x86_64')
+          url='https://github.com/backmeupplz/drumkit'
+          license=('MIT')
+          depends=('alsa-lib')
+          makedepends=('cargo')
+          source=("$pkgname-$pkgver.tar.gz::https://github.com/backmeupplz/drumkit/archive/refs/tags/v$pkgver.tar.gz")
+          sha256sums=('__SHA256__')
+
+          prepare() {
+            cd "$pkgname-$pkgver"
+            export RUSTUP_TOOLCHAIN=stable
+            cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+          }
+
+          build() {
+            cd "$pkgname-$pkgver"
+            export RUSTUP_TOOLCHAIN=stable
+            export CARGO_TARGET_DIR=target
+            cargo build --frozen --release
+          }
+
+          package() {
+            cd "$pkgname-$pkgver"
+            install -Dm0755 -t "$pkgdir/usr/bin/" "target/release/$pkgname"
+            install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+          }
+          EOF
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' PKGBUILD
+          sed -i "s/__VERSION__/$VERSION/" PKGBUILD
+          sed -i "s/__SHA256__/$SHA256/" PKGBUILD
+
+      - name: Generate .SRCINFO
+        run: |
+          useradd -m builder
+          chown builder PKGBUILD
+          su builder -c "makepkg --printsrcinfo > .SRCINFO"
+
+      - name: Push to AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          echo "Host aur.archlinux.org" > ~/.ssh/config
+          echo "  IdentityFile ~/.ssh/aur" >> ~/.ssh/config
+          echo "  User aur" >> ~/.ssh/config
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
+
+          git clone ssh://aur@aur.archlinux.org/drumkit.git aur-repo
+          cp PKGBUILD aur-repo/PKGBUILD
+          cp .SRCINFO aur-repo/.SRCINFO
+          cd aur-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add PKGBUILD .SRCINFO
+          git commit -m "Update to ${{ steps.version.outputs.version }}"
+          git push
