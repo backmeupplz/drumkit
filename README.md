@@ -28,6 +28,13 @@ Connect your e-drums (Alesis Nitro Max, Roland, Yamaha, etc.) via USB and trigge
 
 ## Install
 
+### From PPA (Ubuntu/Debian)
+
+```
+sudo add-apt-repository ppa:borodutch/drumkit
+sudo apt install drumkit
+```
+
 ### From AUR (Arch Linux)
 
 ```
