@@ -321,17 +321,6 @@ The codebase is a single Rust crate:
 | `sample.rs` | Multi-format audio decoding (WAV, FLAC, OGG, MP3) |
 | `stderr.rs` | Stderr capture for clean TUI |
 
-## Sound Attributions
-
-### Wind Cats Kit
-
-Cat meow samples sourced from [BigSoundBank](https://bigsoundbank.com/) under **CC0 (Public Domain)** license:
-
-- "Little Meow of a Cat" (#0494) and "Little Meow" series (#1472–#1481) by BigSoundBank
-- "Meow Cat" series (#1895, #1896, #1898, #1899) by BigSoundBank
-
-Kick and hi-hat samples from the [FreePats General MIDI](http://freepats.zenvoid.org/) kit.
-
 ## License
 
 MIT
