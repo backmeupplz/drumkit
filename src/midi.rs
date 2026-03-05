@@ -313,36 +313,43 @@ pub fn build_midi_callback(
             // Note-on with velocity > 0
             if status == 0x90 && velocity > 0 {
                 let current_mapping = shared_mapping.load();
+                // Remap note for sample lookup (e.g., GM 48 → kit sample 45)
+                let sample_note = current_mapping.remap_note(note);
+
                 for &target in current_mapping.choke_targets(note) {
+                    let choke_note = current_mapping.remap_note(target);
                     let _ = prod.push(crate::audio::AudioCommand::Choke {
-                        note: target,
+                        note: choke_note,
                         fade_frames: choke_fade,
                     });
-                    let _ = tui_tx.send(crate::tui::TuiEvent::Choke { note: target });
+                    let _ = tui_tx.send(crate::tui::TuiEvent::Choke { note: choke_note });
                 }
 
                 let kit_notes = shared_notes.load();
-                if let Some(group) = kit_notes.get(&note) {
+                if let Some(group) = kit_notes.get(&sample_note) {
                     if let Some(samples) = group.select(velocity) {
                         let gain = velocity as f32 / 127.0;
                         let _ = prod.push(crate::audio::AudioCommand::Trigger {
                             samples: Arc::clone(samples),
                             gain,
-                            note,
+                            note: sample_note,
                         });
                     }
                 }
 
+                // TUI uses original note for GM name display
                 let _ = tui_tx.send(crate::tui::TuiEvent::Hit { note, velocity });
             }
 
             // Polyphonic aftertouch (cymbal grab choke)
             if status == 0xA0 && velocity == 127 {
+                let current_mapping = shared_mapping.load();
+                let choke_note = current_mapping.remap_note(note);
                 let _ = prod.push(crate::audio::AudioCommand::Choke {
-                    note,
+                    note: choke_note,
                     fade_frames: aftertouch_fade,
                 });
-                let _ = tui_tx.send(crate::tui::TuiEvent::Choke { note });
+                let _ = tui_tx.send(crate::tui::TuiEvent::Choke { note: choke_note });
             }
         }
     }

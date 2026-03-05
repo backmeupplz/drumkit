@@ -19,6 +19,10 @@ struct MappingFile {
     notes: HashMap<String, String>,
     #[serde(default)]
     chokes: HashMap<String, Vec<u8>>,
+    /// Optional note remapping: incoming MIDI note → kit sample note.
+    /// Use this when a kit's sample layout doesn't match General MIDI.
+    #[serde(default)]
+    remap: HashMap<String, u8>,
 }
 
 /// A mapping from MIDI note numbers to human-readable names and choke rules.
@@ -27,6 +31,10 @@ pub struct NoteMapping {
     pub name: String,
     pub notes: HashMap<u8, String>,
     pub chokes: HashMap<u8, Vec<u8>>,
+    /// Note remapping: incoming MIDI note → kit sample note.
+    /// When a kit's sample layout doesn't match GM, this translates note numbers
+    /// so the correct sample plays (e.g., GM note 48 "Hi-Mid Tom" → kit sample 45).
+    pub remap: HashMap<u8, u8>,
     pub source: MappingSource,
 }
 
@@ -51,6 +59,12 @@ impl NoteMapping {
     pub fn set_note_name(&mut self, note: u8, name: String) {
         self.notes.insert(note, name);
     }
+
+    /// Remap a MIDI note number. Returns the remapped note, or the original if
+    /// no remap is defined.
+    pub fn remap_note(&self, note: u8) -> u8 {
+        self.remap.get(&note).copied().unwrap_or(note)
+    }
 }
 
 /// Parse a TOML string into a `NoteMapping`.
@@ -70,10 +84,17 @@ pub fn parse_mapping(toml_str: &str, source: MappingSource) -> Result<NoteMappin
         chokes.insert(note, v);
     }
 
+    let mut remap = HashMap::new();
+    for (k, v) in file.remap {
+        let note: u8 = k.parse().with_context(|| format!("Invalid remap note: {}", k))?;
+        remap.insert(note, v);
+    }
+
     Ok(NoteMapping {
         name: file.name,
         notes,
         chokes,
+        remap,
         source,
     })
 }
@@ -90,10 +111,16 @@ pub fn serialize_mapping(mapping: &NoteMapping) -> Result<String> {
         chokes.insert(k.to_string(), v.clone());
     }
 
+    let mut remap = HashMap::new();
+    for (&k, &v) in &mapping.remap {
+        remap.insert(k.to_string(), v);
+    }
+
     let file = MappingFile {
         name: mapping.name.clone(),
         notes,
         chokes,
+        remap,
     };
 
     toml::to_string_pretty(&file).context("Failed to serialize mapping")
@@ -132,6 +159,7 @@ fn fallback_mapping() -> NoteMapping {
         name: "General MIDI".to_string(),
         notes,
         chokes,
+        remap: HashMap::new(),
         source: MappingSource::BuiltIn,
     }
 }
@@ -286,6 +314,7 @@ name = "Bad"
                 .into_iter()
                 .collect(),
             chokes: [(42, vec![46, 23])].into_iter().collect(),
+            remap: [(48, 45)].into_iter().collect(),
             source: MappingSource::BuiltIn,
         };
 
@@ -296,6 +325,8 @@ name = "Bad"
         assert_eq!(parsed.drum_name(36), "Kick");
         assert_eq!(parsed.drum_name(38), "Snare");
         assert_eq!(parsed.choke_targets(42), &[46, 23]);
+        assert_eq!(parsed.remap_note(48), 45);
+        assert_eq!(parsed.remap_note(36), 36); // no remap → identity
     }
 
     #[test]
@@ -304,6 +335,7 @@ name = "Bad"
             name: "Test".to_string(),
             notes: HashMap::new(),
             chokes: HashMap::new(),
+            remap: HashMap::new(),
             source: MappingSource::BuiltIn,
         };
         assert_eq!(m.drum_name(60), "Unknown");
@@ -338,6 +370,7 @@ name = "Bad"
             name: "My Custom Kit".to_string(),
             notes: [(36, "Kick".to_string())].into_iter().collect(),
             chokes: HashMap::new(),
+            remap: HashMap::new(),
             source: MappingSource::BuiltIn,
         };
 
