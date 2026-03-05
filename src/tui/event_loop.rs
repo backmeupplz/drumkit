@@ -7,8 +7,8 @@ use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use super::list_nav::first_selectable;
-use super::{popups, render, AppMode, AppState, PlayResources, Popup, TuiEvent};
-use crate::{audio, download, kit, learning, lesson, mapping, midi, settings};
+use super::{popups, render, AppState, PlayResources, Popup, TuiEvent};
+use crate::{audio, download, kit, mapping, midi, settings};
 
 pub(super) fn event_loop(
     terminal: &mut Terminal<ratatui::backend::CrosstermBackend<io::Stdout>>,
@@ -25,16 +25,8 @@ pub(super) fn event_loop(
         let extra_kit_dirs = &resources.extra_kits_dirs;
         let extra_mapping_dirs = &resources.extra_mapping_dirs;
         let kit_repos = &resources.kit_repos;
-        let mapping_for_render = Arc::clone(&state.mapping);
         terminal.draw(|frame| {
-            match state.mode {
-                AppMode::Normal => render::ui(frame, state, extra_kit_dirs, extra_mapping_dirs, kit_repos),
-                AppMode::Learning => {
-                    if let Some(ref ls) = state.learning_state {
-                        learning::render::render_learning(frame, frame.area(), ls, &mapping_for_render);
-                    }
-                }
-            }
+            render::ui(frame, state, extra_kit_dirs, extra_mapping_dirs, kit_repos);
         })?;
 
         if state.should_quit {
@@ -44,18 +36,6 @@ pub(super) fn event_loop(
         if event::poll(Duration::from_millis(33))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press {
-                    continue;
-                }
-
-                // Learning mode input
-                if state.mode == AppMode::Learning {
-                    if let Some(ref mut ls) = state.learning_state {
-                        let should_exit = learning::input::handle_learning_key(ls, key.code);
-                        if should_exit {
-                            state.mode = AppMode::Normal;
-                            state.learning_state = None;
-                        }
-                    }
                     continue;
                 }
 
@@ -143,16 +123,6 @@ pub(super) fn event_loop(
                             let _ = tx.send(TuiEvent::KitStoreFetched { result });
                         });
                     }
-                    KeyCode::Char('p') => {
-                        // Enter learning mode
-                        let lessons = lesson::discover_lessons(&[]);
-                        let ls = learning::LearningState::new(
-                            lessons,
-                            resources.scheduler_tx.clone(),
-                        );
-                        state.learning_state = Some(ls);
-                        state.mode = AppMode::Learning;
-                    }
                     _ => {}
                 }
             }
@@ -162,12 +132,6 @@ pub(super) fn event_loop(
             match ev {
                 TuiEvent::Hit { note, velocity } => {
                     state.on_hit(note, velocity);
-                    // Forward hit to learning mode if active
-                    if state.mode == AppMode::Learning {
-                        if let Some(ref mut ls) = state.learning_state {
-                            ls.record_hit(note);
-                        }
-                    }
                 }
                 TuiEvent::Choke { note } => state.on_choke(note),
                 TuiEvent::KitReloaded { note_keys, kit_path } => {
@@ -234,11 +198,6 @@ pub(super) fn event_loop(
                             state.set_status(format!("Download failed: {}", e));
                             state.popup = None;
                         }
-                    }
-                }
-                TuiEvent::LearningSchedulerEvent(sched_event) => {
-                    if let Some(ref mut ls) = state.learning_state {
-                        ls.handle_scheduler_event(sched_event);
                     }
                 }
                 TuiEvent::KitLoadComplete { result, path, name } => {
@@ -340,5 +299,6 @@ pub(super) fn event_loop(
                 }
             }
         }
+
     }
 }

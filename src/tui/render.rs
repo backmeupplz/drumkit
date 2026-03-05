@@ -233,7 +233,29 @@ fn render_pad_grid(frame: &mut Frame, area: Rect, state: &AppState) {
         let note_line = if velocity > 0 {
             format!("{:>3} v{}", pad.note, velocity)
         } else {
-            format!("{:>3}", pad.note)
+            // Show remap sources (e.g., "45 ←48") when idle
+            let remap_sources: Vec<u8> = state
+                .mapping
+                .remap
+                .iter()
+                .filter(|(_, target)| **target == pad.note)
+                .map(|(src, _)| *src)
+                .collect();
+            if remap_sources.is_empty() {
+                format!("{:>3}", pad.note)
+            } else {
+                let sources: String = remap_sources
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let s = format!(" {} \u{2190}{}", pad.note, sources);
+                if s.len() > inner_w {
+                    format!("{:>3}", pad.note)
+                } else {
+                    s
+                }
+            }
         };
 
         let pad_block = Block::default()
@@ -399,7 +421,7 @@ fn render_shortcuts(frame: &mut Frame, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let hints = " p learn  l log  k kit  s store  n mapping  r rename  d dirs  a audio  m midi  q quit";
+    let hints = " l log  k kit  s store  n mapping  r rename  d dirs  a audio  m midi  q quit";
     let hint_style = Style::default().fg(Color::DarkGray);
     let line = Line::from(Span::styled(hints, hint_style));
     frame.render_widget(Paragraph::new(line), area);

@@ -316,13 +316,14 @@ pub fn build_midi_callback(
                 // Remap note for sample lookup (e.g., GM 48 → kit sample 45)
                 let sample_note = current_mapping.remap_note(note);
 
+                // Choke targets are sample note numbers (voice tags), not MIDI
+                // input notes, so they must NOT be remapped.
                 for &target in current_mapping.choke_targets(note) {
-                    let choke_note = current_mapping.remap_note(target);
                     let _ = prod.push(crate::audio::AudioCommand::Choke {
-                        note: choke_note,
+                        note: target,
                         fade_frames: choke_fade,
                     });
-                    let _ = tui_tx.send(crate::tui::TuiEvent::Choke { note: choke_note });
+                    let _ = tui_tx.send(crate::tui::TuiEvent::Choke { note: target });
                 }
 
                 let kit_notes = shared_notes.load();
@@ -342,6 +343,7 @@ pub fn build_midi_callback(
             }
 
             // Polyphonic aftertouch (cymbal grab choke)
+            // Remap so the choke targets the correct voice tag.
             if status == 0xA0 && velocity == 127 {
                 let current_mapping = shared_mapping.load();
                 let choke_note = current_mapping.remap_note(note);
