@@ -2,6 +2,8 @@ mod audio;
 mod commands;
 mod download;
 mod kit;
+mod learning;
+mod lesson;
 mod mapping;
 mod midi;
 mod play;

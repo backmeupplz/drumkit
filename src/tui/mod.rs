@@ -20,7 +20,14 @@ use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 
-use crate::{audio, download, kit, mapping, midi, stderr};
+use crate::{audio, download, kit, learning, mapping, midi, stderr};
+
+/// Top-level app mode: Normal play vs Learning.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AppMode {
+    Normal,
+    Learning,
+}
 
 /// Events fed into the TUI from various sources.
 pub enum TuiEvent {
@@ -41,6 +48,8 @@ pub enum TuiEvent {
         result: Result<std::path::PathBuf, String>,
         kit_name: String,
     },
+    /// Events from the learning mode scheduler.
+    LearningSchedulerEvent(learning::scheduler::SchedulerEvent),
 }
 
 /// Mode for the library directory popup.
@@ -110,6 +119,7 @@ pub struct PlayResources {
     pub extra_mapping_dirs: Vec<PathBuf>,
     pub shared_mapping: Arc<ArcSwap<mapping::NoteMapping>>,
     pub kit_repos: Vec<String>,
+    pub scheduler_tx: Option<mpsc::Sender<learning::scheduler::SchedulerCommand>>,
 }
 
 /// Visual state for a single pad in the grid.
@@ -145,6 +155,8 @@ pub struct AppState {
     pub(crate) should_quit: bool,
     pub(crate) popup: Option<Popup>,
     pub(crate) log_lines: Vec<String>,
+    pub mode: AppMode,
+    pub learning_state: Option<learning::LearningState>,
 }
 
 impl AppState {
@@ -182,6 +194,8 @@ impl AppState {
             should_quit: false,
             popup: None,
             log_lines: initial_log,
+            mode: AppMode::Normal,
+            learning_state: None,
         }
     }
 

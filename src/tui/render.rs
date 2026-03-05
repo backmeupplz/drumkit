@@ -399,7 +399,7 @@ fn render_shortcuts(frame: &mut Frame, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let hints = " l log  k kit  s store  n mapping  r rename  d dirs  a audio  m midi  q quit";
+    let hints = " p learn  l log  k kit  s store  n mapping  r rename  d dirs  a audio  m midi  q quit";
     let hint_style = Style::default().fg(Color::DarkGray);
     let line = Line::from(Span::styled(hints, hint_style));
     frame.render_widget(Paragraph::new(line), area);

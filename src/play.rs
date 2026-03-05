@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::{audio, kit, mapping, midi, settings, setup, stderr, tui};
+use crate::{audio, kit, learning, mapping, midi, settings, setup, stderr, tui};
 
 pub fn cmd_play(kit: Option<PathBuf>, port: Option<usize>, device: Option<usize>, kits_dirs: Vec<PathBuf>) -> Result<()> {
     let saved = settings::load_settings();
@@ -295,6 +295,30 @@ fn cmd_play_direct_inner(
         }
     });
 
+    // Spawn learning mode scheduler
+    let downbeat_click = learning::metronome::downbeat_click(loaded_kit.sample_rate, loaded_kit.channels);
+    let offbeat_click = learning::metronome::offbeat_click(loaded_kit.sample_rate, loaded_kit.channels);
+    let scheduler_event_tx = tui_tx.clone();
+    let scheduler_tx = learning::scheduler::spawn_scheduler(
+        Arc::clone(&shared_producer),
+        {
+            let (sched_ev_tx, sched_ev_rx) = mpsc::channel();
+            // Bridge scheduler events to TuiEvent channel
+            let tui_tx_for_sched = scheduler_event_tx;
+            std::thread::Builder::new()
+                .name("sched-bridge".into())
+                .spawn(move || {
+                    while let Ok(ev) = sched_ev_rx.recv() {
+                        let _ = tui_tx_for_sched.send(tui::TuiEvent::LearningSchedulerEvent(ev));
+                    }
+                })
+                .expect("Failed to spawn scheduler bridge thread");
+            sched_ev_tx
+        },
+        downbeat_click,
+        offbeat_click,
+    );
+
     let mut initial_log = kit_summary;
     if let Some(ref cap) = capture {
         cap.drain_into(&mut initial_log);
@@ -333,6 +357,7 @@ fn cmd_play_direct_inner(
         extra_mapping_dirs,
         shared_mapping,
         kit_repos,
+        scheduler_tx: Some(scheduler_tx),
     };
 
     tui::run(terminal, tui_rx, state, resources)
