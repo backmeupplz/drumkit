@@ -19,7 +19,8 @@ jobs:
         id: sha
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          curl -fSL -o source.tar.gz "https://github.com/backmeupplz/drumkit/archive/refs/tags/${{ github.event.release.tag_name }}.tar.gz"
+          # --retry: the tag may take a few seconds to reach the GitHub mirror
+          curl -fSL --retry 10 --retry-delay 15 --retry-all-errors -o source.tar.gz "https://github.com/backmeupplz/drumkit/archive/refs/tags/${{ github.event.release.tag_name }}.tar.gz"
           SHA256=$(sha256sum source.tar.gz | awk '{print $1}')
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
 
@@ -52,9 +53,9 @@ jobs:
 
       - name: Push formula to tap
         env:
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_TOKEN: ${{ secrets.FJ_PUSH_TOKEN }}
         run: |
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/backmeupplz/homebrew-drumkit.git" tap
+          git clone "https://backmeupplz:${TAP_TOKEN}@git.borodutch.com/backmeupplz/homebrew-drumkit.git" tap
           mkdir -p tap/Formula
           cp Formula/drumkit.rb tap/Formula/drumkit.rb
           cd tap

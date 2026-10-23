@@ -1,0 +1,24 @@
+name: GitHub Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  # Releases don't mirror. Publishing the GitHub Release fires .github/workflows/windows.yml
+  # on GitHub (there is no Windows runner here), which attaches drumkit-windows-x86_64.zip.
+  github-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+          TITLE: ${{ github.event.release.name }}
+          NOTES: ${{ github.event.release.body }}
+        run: |
+          # The tag reaches the GitHub mirror within seconds; wait for it rather than letting GitHub create one
+          for i in $(seq 30); do gh api "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1 && break; sleep 10; done
+          gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$REPO" --verify-tag --title "${TITLE:-$TAG}" --notes "$NOTES"
