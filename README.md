@@ -329,7 +329,7 @@ Publish a release on [git.borodutch.com](https://git.borodutch.com/backmeupplz/d
 tea release create --repo backmeupplz/drumkit --tag vX.Y.Z --title vX.Y.Z
 ```
 
-Forgejo Actions publishes the matching GitHub Release (`github-release.yml`), updates the Homebrew tap (`homebrew.yml`), pushes the AUR package (`aur.yml`) and uploads the PPA source packages (`ppa.yml`). The Windows zip is still built on GitHub: `.github/workflows/windows.yml` runs when that GitHub Release is published and attaches `drumkit-windows-x86_64.zip` to it.
+Forgejo Actions publishes the matching GitHub Release (`github-release.yml`), updates the Homebrew tap (`homebrew.yml`), pushes the AUR package (`aur.yml`) and uploads the PPA source packages (`ppa.yml`). `github-release.yml` also cross-compiles the Windows build on Linux and attaches `drumkit-windows-x86_64.zip` to both releases.
 
 ## License
 

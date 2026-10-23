@@ -5,8 +5,7 @@ on:
     types: [published]
 
 jobs:
-  # Releases don't mirror. Publishing the GitHub Release fires .github/workflows/windows.yml
-  # on GitHub (there is no Windows runner here), which attaches drumkit-windows-x86_64.zip.
+  # Releases don't mirror: publish the GitHub Release (installers and Homebrew download from it).
   github-release:
     runs-on: ubuntu-latest
     steps:
@@ -22,3 +21,32 @@ jobs:
           for i in $(seq 30); do gh api "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1 && break; sleep 10; done
           gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 ||
             gh release create "$TAG" --repo "$REPO" --verify-tag --title "${TITLE:-$TAG}" --notes "$NOTES"
+
+  # Cross-compiled on Linux (MinGW, x86_64-pc-windows-gnu): there is no Windows runner here. The .exe only links
+  # Windows system DLLs, like the MSVC build did.
+  windows:
+    needs: github-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build drumkit.exe
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gcc-mingw-w64-x86-64 zip
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --target x86_64-pc-windows-gnu
+          ~/.cargo/bin/cargo build --release --target x86_64-pc-windows-gnu
+          mkdir dist && cp target/x86_64-pc-windows-gnu/release/drumkit.exe dist/
+          (cd dist && zip -q ../drumkit-windows-x86_64.zip drumkit.exe)
+      - name: Attach to the GitHub and Forgejo releases
+        env:
+          GH_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
+          FJ_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+          ASSETS: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases/${{ github.event.release.id }}/assets
+        run: |
+          gh release upload "$TAG" drumkit-windows-x86_64.zip --repo "$REPO" --clobber
+          for id in $(curl -fsS -H "Authorization: token $FJ_TOKEN" "$ASSETS" | jq '.[] | select(.name == "drumkit-windows-x86_64.zip") | .id'); do
+            curl -fsS -X DELETE -H "Authorization: token $FJ_TOKEN" "$ASSETS/$id"
+          done
+          curl -fsS -o /dev/null -H "Authorization: token $FJ_TOKEN" -F "attachment=@drumkit-windows-x86_64.zip" "$ASSETS?name=drumkit-windows-x86_64.zip"
