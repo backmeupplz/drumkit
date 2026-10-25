@@ -1,16 +1,22 @@
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph},
-    Frame,
 };
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use super::{render_popups, AppState, PadState, FLASH_DURATION_MS};
+use super::{AppState, FLASH_DURATION_MS, PadState, render_popups};
 
-pub(super) fn ui(frame: &mut Frame, state: &AppState, extra_kit_dirs: &[PathBuf], extra_mapping_dirs: &[PathBuf], kit_repos: &[String]) {
+pub(super) fn ui(
+    frame: &mut Frame,
+    state: &AppState,
+    extra_kit_dirs: &[PathBuf],
+    extra_mapping_dirs: &[PathBuf],
+    kit_repos: &[String],
+) {
     let area = frame.area();
 
     if area.height < 3 || area.width < 15 {
@@ -37,7 +43,15 @@ pub(super) fn ui(frame: &mut Frame, state: &AppState, extra_kit_dirs: &[PathBuf]
 
     // Popup overlay
     if let Some(ref popup) = state.popup {
-        render_popups::render_popup(frame, area, popup, state, extra_kit_dirs, extra_mapping_dirs, kit_repos);
+        render_popups::render_popup(
+            frame,
+            area,
+            popup,
+            state,
+            extra_kit_dirs,
+            extra_mapping_dirs,
+            kit_repos,
+        );
     }
 }
 
@@ -273,11 +287,13 @@ fn render_pad_grid(frame: &mut Frame, area: Rect, state: &AppState) {
             )),
             Line::from(Span::styled(
                 note_line,
-                Style::default().fg(if green > 0 {
-                    text_color
-                } else {
-                    Color::DarkGray
-                }).bg(bg),
+                Style::default()
+                    .fg(if green > 0 {
+                        text_color
+                    } else {
+                        Color::DarkGray
+                    })
+                    .bg(bg),
             )),
         ];
 
@@ -303,11 +319,7 @@ fn render_pad_list_compact(frame: &mut Frame, area: Rect, state: &AppState, now:
             format!("{:>3} {}", pad.note, pad.name)
         };
 
-        let display = if label.len() > w {
-            &label[..w]
-        } else {
-            &label
-        };
+        let display = if label.len() > w { &label[..w] } else { &label };
 
         lines.push(Line::from(Span::styled(
             display.to_string(),
@@ -360,7 +372,13 @@ fn render_hit_log(frame: &mut Frame, area: Rect, state: &AppState) {
     let show_bar = w >= 28;
     let show_note = w >= 20;
 
-    let fixed = if show_bar { 9 } else if show_note { 8 } else { 4 }; // spaces + note + vel
+    let fixed = if show_bar {
+        9
+    } else if show_note {
+        8
+    } else {
+        4
+    }; // spaces + note + vel
     let name_w = w.saturating_sub(fixed).min(16).max(3);
 
     let bar_max = if show_bar {

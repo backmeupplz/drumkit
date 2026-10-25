@@ -1,9 +1,9 @@
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
-    Frame,
 };
 
 /// Centered popup taking ~80% of the given area (min 30×6).
@@ -36,7 +36,12 @@ pub(crate) fn styled_block(title: &str, color: Color) -> Block<'_> {
 
 /// Split an inner area into (content, 1-line footer).
 pub(crate) fn content_footer_split(inner: Rect) -> (Rect, Rect) {
-    let content = Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1));
+    let content = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(1),
+    );
     let footer = Rect::new(
         inner.x,
         inner.y + inner.height.saturating_sub(1),
@@ -134,10 +139,7 @@ pub(crate) fn render_progress_popup(
         )),
         Line::from(vec![
             Span::raw(" "),
-            Span::styled(
-                "\u{2588}".repeat(filled),
-                Style::default().fg(color),
-            ),
+            Span::styled("\u{2588}".repeat(filled), Style::default().fg(color)),
             Span::styled(
                 "\u{2591}".repeat(empty),
                 Style::default().fg(Color::Rgb(50, 50, 60)),

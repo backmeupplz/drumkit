@@ -3,7 +3,7 @@ use arc_swap::ArcSwap;
 use midir::MidiInput;
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 
 /// MIDI message types relevant to drum kits
 #[derive(Debug, Clone, PartialEq)]
@@ -41,7 +41,9 @@ impl MidiMessage {
     /// Parse raw MIDI bytes into a MidiMessage
     pub fn parse(data: &[u8]) -> Self {
         if data.is_empty() {
-            return MidiMessage::Other { data: data.to_vec() };
+            return MidiMessage::Other {
+                data: data.to_vec(),
+            };
         }
 
         // System real-time messages (single byte, 0xF8-0xFF)
@@ -79,7 +81,9 @@ impl MidiMessage {
                 controller: data[1],
                 value: data[2],
             },
-            _ => MidiMessage::Other { data: data.to_vec() },
+            _ => MidiMessage::Other {
+                data: data.to_vec(),
+            },
         }
     }
 }
@@ -121,7 +125,11 @@ pub fn drum_name(note: u8) -> &'static str {
 impl fmt::Display for MidiMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MidiMessage::NoteOn { channel, note, velocity } => {
+            MidiMessage::NoteOn {
+                channel,
+                note,
+                velocity,
+            } => {
                 let name = drum_name(*note);
                 let bar_len = (*velocity as usize) * 40 / 127;
                 let bar: String = "█".repeat(bar_len);
@@ -135,7 +143,11 @@ impl fmt::Display for MidiMessage {
                     bar = bar,
                 )
             }
-            MidiMessage::NoteOff { channel, note, velocity } => {
+            MidiMessage::NoteOff {
+                channel,
+                note,
+                velocity,
+            } => {
                 let name = drum_name(*note);
                 write!(
                     f,
@@ -146,7 +158,11 @@ impl fmt::Display for MidiMessage {
                     name = name,
                 )
             }
-            MidiMessage::PolyAftertouch { channel, note, pressure } => {
+            MidiMessage::PolyAftertouch {
+                channel,
+                note,
+                pressure,
+            } => {
                 let name = drum_name(*note);
                 write!(
                     f,
@@ -157,7 +173,11 @@ impl fmt::Display for MidiMessage {
                     name = name,
                 )
             }
-            MidiMessage::ControlChange { channel, controller, value } => {
+            MidiMessage::ControlChange {
+                channel,
+                controller,
+                value,
+            } => {
                 let cc_name = if *controller == 4 { "HH Pedal" } else { "" };
                 write!(
                     f,
@@ -196,14 +216,15 @@ pub struct MidiDevice {
 
 /// List available MIDI input devices
 pub fn list_devices() -> Result<Vec<MidiDevice>> {
-    let midi_in = MidiInput::new("drumkit-list")
-        .context("Failed to create MIDI input")?;
+    let midi_in = MidiInput::new("drumkit-list").context("Failed to create MIDI input")?;
 
     let ports = midi_in.ports();
     let mut devices = Vec::new();
 
     for (i, port) in ports.iter().enumerate() {
-        let name = midi_in.port_name(port).unwrap_or_else(|_| format!("Unknown port {}", i));
+        let name = midi_in
+            .port_name(port)
+            .unwrap_or_else(|_| format!("Unknown port {}", i));
         devices.push(MidiDevice {
             name,
             port_index: i,
@@ -222,22 +243,20 @@ pub struct TimestampedMessage {
 /// Connect to a MIDI input port with a raw callback.
 /// The caller controls what happens on each MIDI message — no allocation, no channels.
 /// Returns the connection handle (dropping it disconnects).
-pub fn connect_callback<F>(
-    port_index: usize,
-    callback: F,
-) -> Result<midir::MidiInputConnection<()>>
+pub fn connect_callback<F>(port_index: usize, callback: F) -> Result<midir::MidiInputConnection<()>>
 where
     F: FnMut(u64, &[u8]) + Send + 'static,
 {
-    let midi_in = MidiInput::new("drumkit-trigger")
-        .context("Failed to create MIDI input")?;
+    let midi_in = MidiInput::new("drumkit-trigger").context("Failed to create MIDI input")?;
 
     let ports = midi_in.ports();
     let port = ports
         .get(port_index)
         .context(format!("MIDI port index {} not found", port_index))?;
 
-    let port_name = midi_in.port_name(port).unwrap_or_else(|_| "Unknown".to_string());
+    let port_name = midi_in
+        .port_name(port)
+        .unwrap_or_else(|_| "Unknown".to_string());
 
     let mut callback = callback;
     let connection = midi_in
@@ -260,15 +279,16 @@ pub fn connect(
     port_index: usize,
     tx: mpsc::Sender<TimestampedMessage>,
 ) -> Result<midir::MidiInputConnection<()>> {
-    let midi_in = MidiInput::new("drumkit-monitor")
-        .context("Failed to create MIDI input")?;
+    let midi_in = MidiInput::new("drumkit-monitor").context("Failed to create MIDI input")?;
 
     let ports = midi_in.ports();
     let port = ports
         .get(port_index)
         .context(format!("MIDI port index {} not found", port_index))?;
 
-    let port_name = midi_in.port_name(port).unwrap_or_else(|_| "Unknown".to_string());
+    let port_name = midi_in
+        .port_name(port)
+        .unwrap_or_else(|_| "Unknown".to_string());
 
     let connection = midi_in
         .connect(

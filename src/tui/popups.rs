@@ -1,8 +1,8 @@
 use crossterm::event::KeyCode;
 use ratatui::widgets::ListState;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
 use super::input::handle_text_input_key;
 use super::list_nav::{index_down, index_up, list_down, list_down_skip, list_up, list_up_skip};
@@ -13,34 +13,53 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
     let popup = state.popup.as_mut().unwrap();
     match popup {
         Popup::Log { scroll } => match key {
-            KeyCode::Char('l') | KeyCode::Esc => { state.popup = None; }
-            KeyCode::Char('q') => { state.popup = None; state.should_quit = true; }
-            KeyCode::Up => { *scroll = scroll.saturating_sub(1); }
-            KeyCode::Down => {
-                if *scroll + 1 < state.log_lines.len() { *scroll += 1; }
+            KeyCode::Char('l') | KeyCode::Esc => {
+                state.popup = None;
             }
-            KeyCode::Home => { *scroll = 0; }
-            KeyCode::End => { *scroll = state.log_lines.len().saturating_sub(1); }
+            KeyCode::Char('q') => {
+                state.popup = None;
+                state.should_quit = true;
+            }
+            KeyCode::Up => {
+                *scroll = scroll.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                if *scroll + 1 < state.log_lines.len() {
+                    *scroll += 1;
+                }
+            }
+            KeyCode::Home => {
+                *scroll = 0;
+            }
+            KeyCode::End => {
+                *scroll = state.log_lines.len().saturating_sub(1);
+            }
             _ => {}
         },
         Popup::KitPicker { kits, list_state } => match key {
-            KeyCode::Char('k') | KeyCode::Esc => { state.popup = None; }
-            KeyCode::Char('q') => { state.popup = None; state.should_quit = true; }
+            KeyCode::Char('k') | KeyCode::Esc => {
+                state.popup = None;
+            }
+            KeyCode::Char('q') => {
+                state.popup = None;
+                state.should_quit = true;
+            }
             KeyCode::Char('s') => {
                 state.popup = Some(Popup::KitStoreFetching);
                 let tx = resources.tui_tx.clone();
                 let dirs = resources.extra_kits_dirs.clone();
                 let repos = resources.kit_repos.clone();
                 std::thread::spawn(move || {
-                    let result = download::fetch_kit_list(&repos, &dirs)
-                        .map_err(|e| e.to_string());
+                    let result = download::fetch_kit_list(&repos, &dirs).map_err(|e| e.to_string());
                     let _ = tx.send(TuiEvent::KitStoreFetched { result });
                 });
             }
             KeyCode::Up => list_up(list_state, kits.len()),
             KeyCode::Down => list_down(list_state, kits.len()),
             KeyCode::Enter => {
-                if kits.is_empty() { return; }
+                if kits.is_empty() {
+                    return;
+                }
                 if let Some(idx) = list_state.selected() {
                     let selected_path = kits[idx].path.clone();
                     let selected_name = kits[idx].name.clone();
@@ -72,13 +91,23 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
             }
             _ => {}
         },
-        Popup::AudioPicker { devices, list_state } => match key {
-            KeyCode::Char('a') | KeyCode::Esc => { state.popup = None; }
-            KeyCode::Char('q') => { state.popup = None; state.should_quit = true; }
+        Popup::AudioPicker {
+            devices,
+            list_state,
+        } => match key {
+            KeyCode::Char('a') | KeyCode::Esc => {
+                state.popup = None;
+            }
+            KeyCode::Char('q') => {
+                state.popup = None;
+                state.should_quit = true;
+            }
             KeyCode::Up => list_up(list_state, devices.len()),
             KeyCode::Down => list_down(list_state, devices.len()),
             KeyCode::Enter => {
-                if devices.is_empty() { return; }
+                if devices.is_empty() {
+                    return;
+                }
                 if let Some(idx) = list_state.selected() {
                     let new_device_index = devices[idx].index;
                     let new_device_name = devices[idx].name.clone();
@@ -134,13 +163,23 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
             }
             _ => {}
         },
-        Popup::MidiPicker { devices, list_state } => match key {
-            KeyCode::Char('m') | KeyCode::Esc => { state.popup = None; }
-            KeyCode::Char('q') => { state.popup = None; state.should_quit = true; }
+        Popup::MidiPicker {
+            devices,
+            list_state,
+        } => match key {
+            KeyCode::Char('m') | KeyCode::Esc => {
+                state.popup = None;
+            }
+            KeyCode::Char('q') => {
+                state.popup = None;
+                state.should_quit = true;
+            }
             KeyCode::Up => list_up(list_state, devices.len()),
             KeyCode::Down => list_down(list_state, devices.len()),
             KeyCode::Enter => {
-                if devices.is_empty() { return; }
+                if devices.is_empty() {
+                    return;
+                }
                 if let Some(idx) = list_state.selected() {
                     let new_port_index = devices[idx].port_index;
                     let new_port_name = devices[idx].name.clone();
@@ -174,17 +213,32 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
             _ => {}
         },
         Popup::Loading { .. } => match key {
-            KeyCode::Esc => { state.popup = None; }
-            KeyCode::Char('q') => { state.popup = None; state.should_quit = true; }
+            KeyCode::Esc => {
+                state.popup = None;
+            }
+            KeyCode::Char('q') => {
+                state.popup = None;
+                state.should_quit = true;
+            }
             _ => {}
         },
-        Popup::MappingPicker { mappings, list_state } => match key {
-            KeyCode::Char('n') | KeyCode::Esc => { state.popup = None; }
-            KeyCode::Char('q') => { state.popup = None; state.should_quit = true; }
+        Popup::MappingPicker {
+            mappings,
+            list_state,
+        } => match key {
+            KeyCode::Char('n') | KeyCode::Esc => {
+                state.popup = None;
+            }
+            KeyCode::Char('q') => {
+                state.popup = None;
+                state.should_quit = true;
+            }
             KeyCode::Up => list_up(list_state, mappings.len()),
             KeyCode::Down => list_down(list_state, mappings.len()),
             KeyCode::Enter => {
-                if mappings.is_empty() { return; }
+                if mappings.is_empty() {
+                    return;
+                }
                 if let Some(idx) = list_state.selected() {
                     let selected = mappings[idx].clone();
                     let new_mapping = Arc::new(selected);
@@ -196,7 +250,9 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
                 }
             }
             KeyCode::Char('d') | KeyCode::Delete => {
-                if mappings.is_empty() { return; }
+                if mappings.is_empty() {
+                    return;
+                }
                 if let Some(idx) = list_state.selected() {
                     if let mapping::MappingSource::UserFile(path) = &mappings[idx].source {
                         let name = mappings[idx].name.clone();
@@ -218,35 +274,58 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
                 let mappings = mapping::discover_all_mappings(&resources.extra_mapping_dirs);
                 let mut list_state = ListState::default();
                 if !mappings.is_empty() {
-                    let sel = mappings.iter().position(|m| m.name == state.mapping.name).unwrap_or(0);
+                    let sel = mappings
+                        .iter()
+                        .position(|m| m.name == state.mapping.name)
+                        .unwrap_or(0);
                     list_state.select(Some(sel));
                 }
-                state.popup = Some(Popup::MappingPicker { mappings, list_state });
+                state.popup = Some(Popup::MappingPicker {
+                    mappings,
+                    list_state,
+                });
             }
             _ => {
                 let mappings = mapping::discover_all_mappings(&resources.extra_mapping_dirs);
                 let mut list_state = ListState::default();
                 if !mappings.is_empty() {
-                    let sel = mappings.iter().position(|m| m.name == state.mapping.name).unwrap_or(0);
+                    let sel = mappings
+                        .iter()
+                        .position(|m| m.name == state.mapping.name)
+                        .unwrap_or(0);
                     list_state.select(Some(sel));
                 }
-                state.popup = Some(Popup::MappingPicker { mappings, list_state });
+                state.popup = Some(Popup::MappingPicker {
+                    mappings,
+                    list_state,
+                });
             }
         },
-        Popup::NoteRename { note, input, cursor } => match key {
-            KeyCode::Esc => { state.popup = None; }
-            KeyCode::Char('q') if input.is_empty() => { state.popup = None; state.should_quit = true; }
+        Popup::NoteRename {
+            note,
+            input,
+            cursor,
+        } => match key {
+            KeyCode::Esc => {
+                state.popup = None;
+            }
+            KeyCode::Char('q') if input.is_empty() => {
+                state.popup = None;
+                state.should_quit = true;
+            }
             KeyCode::Enter => {
                 if !input.is_empty() {
                     let note_val = *note;
                     let name = input.clone();
 
                     let mut new_mapping = (*state.mapping).clone();
-                    if matches!(new_mapping.source, mapping::MappingSource::BuiltIn | mapping::MappingSource::KitFile(_)) {
+                    if matches!(
+                        new_mapping.source,
+                        mapping::MappingSource::BuiltIn | mapping::MappingSource::KitFile(_)
+                    ) {
                         new_mapping.name = format!("{} (Custom)", new_mapping.name);
-                        new_mapping.source = mapping::MappingSource::UserFile(
-                            PathBuf::from("unsaved"),
-                        );
+                        new_mapping.source =
+                            mapping::MappingSource::UserFile(PathBuf::from("unsaved"));
                     }
                     new_mapping.set_note_name(note_val, name);
 
@@ -260,19 +339,35 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
                     state.popup = None;
                 }
             }
-            other => { handle_text_input_key(input, cursor, None, other); }
+            other => {
+                handle_text_input_key(input, cursor, None, other);
+            }
         },
         Popup::LibraryDir { .. } => {
             handle_library_dir_key(state, resources, key);
         }
         Popup::KitStoreFetching => match key {
-            KeyCode::Esc | KeyCode::Char('s') => { state.popup = None; }
-            KeyCode::Char('q') => { state.popup = None; state.should_quit = true; }
+            KeyCode::Esc | KeyCode::Char('s') => {
+                state.popup = None;
+            }
+            KeyCode::Char('q') => {
+                state.popup = None;
+                state.should_quit = true;
+            }
             _ => {}
         },
-        Popup::KitStore { kits, rows, list_state } => match key {
-            KeyCode::Esc | KeyCode::Char('s') => { state.popup = None; }
-            KeyCode::Char('q') => { state.popup = None; state.should_quit = true; }
+        Popup::KitStore {
+            kits,
+            rows,
+            list_state,
+        } => match key {
+            KeyCode::Esc | KeyCode::Char('s') => {
+                state.popup = None;
+            }
+            KeyCode::Char('q') => {
+                state.popup = None;
+                state.should_quit = true;
+            }
             KeyCode::Char('r') => {
                 state.popup = Some(Popup::KitStoreRepos {
                     selected: 0,
@@ -283,10 +378,16 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
                     confirm_delete: false,
                 });
             }
-            KeyCode::Up => list_up_skip(list_state, rows.len(), |i| matches!(rows[i], download::StoreRow::Kit(_))),
-            KeyCode::Down => list_down_skip(list_state, rows.len(), |i| matches!(rows[i], download::StoreRow::Kit(_))),
+            KeyCode::Up => list_up_skip(list_state, rows.len(), |i| {
+                matches!(rows[i], download::StoreRow::Kit(_))
+            }),
+            KeyCode::Down => list_down_skip(list_state, rows.len(), |i| {
+                matches!(rows[i], download::StoreRow::Kit(_))
+            }),
             KeyCode::Enter => {
-                if kits.is_empty() { return; }
+                if kits.is_empty() {
+                    return;
+                }
                 if let Some(sel) = list_state.selected()
                     && let download::StoreRow::Kit(idx) = rows[sel]
                 {
@@ -321,13 +422,18 @@ pub(super) fn handle_popup_key(state: &mut AppState, resources: &mut PlayResourc
             _ => {}
         },
         Popup::KitDownloading { .. } => match key {
-            KeyCode::Esc => { state.popup = None; }
-            KeyCode::Char('q') => { state.popup = None; state.should_quit = true; }
+            KeyCode::Esc => {
+                state.popup = None;
+            }
+            KeyCode::Char('q') => {
+                state.popup = None;
+                state.should_quit = true;
+            }
             _ => {}
         },
         Popup::KitStoreRepos { .. } => {
             handle_kit_store_repos_key(state, resources, key);
-        },
+        }
     }
 }
 
@@ -346,7 +452,14 @@ fn handle_kit_store_repos_key(state: &mut AppState, resources: &mut PlayResource
     if is_adding {
         match key {
             KeyCode::Esc => {
-                if let Some(Popup::KitStoreRepos { adding, input, cursor, error, .. }) = &mut state.popup {
+                if let Some(Popup::KitStoreRepos {
+                    adding,
+                    input,
+                    cursor,
+                    error,
+                    ..
+                }) = &mut state.popup
+                {
                     *adding = false;
                     input.clear();
                     *cursor = 0;
@@ -373,7 +486,14 @@ fn handle_kit_store_repos_key(state: &mut AppState, resources: &mut PlayResource
                     Some(repo) => {
                         resources.kit_repos.push(repo);
                         save_repo_settings(resources);
-                        if let Some(Popup::KitStoreRepos { adding, input, cursor, error, .. }) = &mut state.popup {
+                        if let Some(Popup::KitStoreRepos {
+                            adding,
+                            input,
+                            cursor,
+                            error,
+                            ..
+                        }) = &mut state.popup
+                        {
                             *adding = false;
                             input.clear();
                             *cursor = 0;
@@ -383,7 +503,13 @@ fn handle_kit_store_repos_key(state: &mut AppState, resources: &mut PlayResource
                 }
             }
             other => {
-                if let Some(Popup::KitStoreRepos { input, cursor, error, .. }) = &mut state.popup {
+                if let Some(Popup::KitStoreRepos {
+                    input,
+                    cursor,
+                    error,
+                    ..
+                }) = &mut state.popup
+                {
                     handle_text_input_key(input, cursor, Some(error), other);
                 }
             }
@@ -392,7 +518,10 @@ fn handle_kit_store_repos_key(state: &mut AppState, resources: &mut PlayResource
         // Check if we're in confirm_delete mode
         let is_confirming = matches!(
             &state.popup,
-            Some(Popup::KitStoreRepos { confirm_delete: true, .. })
+            Some(Popup::KitStoreRepos {
+                confirm_delete: true,
+                ..
+            })
         );
 
         if is_confirming {
@@ -410,7 +539,12 @@ fn handle_kit_store_repos_key(state: &mut AppState, resources: &mut PlayResource
                         save_repo_settings(resources);
                         state.set_status(format!("Removed repo: {}", removed));
                         let new_len = resources.kit_repos.len();
-                        if let Some(Popup::KitStoreRepos { selected, confirm_delete, .. }) = &mut state.popup {
+                        if let Some(Popup::KitStoreRepos {
+                            selected,
+                            confirm_delete,
+                            ..
+                        }) = &mut state.popup
+                        {
                             *confirm_delete = false;
                             if new_len == 0 {
                                 *selected = 0;
@@ -437,14 +571,23 @@ fn handle_kit_store_repos_key(state: &mut AppState, resources: &mut PlayResource
                 let dirs = resources.extra_kits_dirs.clone();
                 let repos = resources.kit_repos.clone();
                 std::thread::spawn(move || {
-                    let result = download::fetch_kit_list(&repos, &dirs)
-                        .map_err(|e| e.to_string());
+                    let result = download::fetch_kit_list(&repos, &dirs).map_err(|e| e.to_string());
                     let _ = tx.send(TuiEvent::KitStoreFetched { result });
                 });
             }
-            KeyCode::Char('q') => { state.popup = None; state.should_quit = true; }
+            KeyCode::Char('q') => {
+                state.popup = None;
+                state.should_quit = true;
+            }
             KeyCode::Char('a') => {
-                if let Some(Popup::KitStoreRepos { adding, input, cursor, error, .. }) = &mut state.popup {
+                if let Some(Popup::KitStoreRepos {
+                    adding,
+                    input,
+                    cursor,
+                    error,
+                    ..
+                }) = &mut state.popup
+                {
                     *adding = true;
                     input.clear();
                     *cursor = 0;
@@ -491,15 +634,30 @@ fn save_dir_settings(resources: &PlayResources) {
 fn handle_library_dir_key(state: &mut AppState, resources: &mut PlayResources, key: KeyCode) {
     let is_browse = matches!(
         &state.popup,
-        Some(Popup::LibraryDir { mode: DirPopupMode::Browse, .. })
+        Some(Popup::LibraryDir {
+            mode: DirPopupMode::Browse,
+            ..
+        })
     );
 
     if is_browse {
         match key {
-            KeyCode::Esc | KeyCode::Char('d') => { state.popup = None; }
-            KeyCode::Char('q') => { state.popup = None; state.should_quit = true; }
+            KeyCode::Esc | KeyCode::Char('d') => {
+                state.popup = None;
+            }
+            KeyCode::Char('q') => {
+                state.popup = None;
+                state.should_quit = true;
+            }
             KeyCode::Char('a') => {
-                if let Some(Popup::LibraryDir { mode, input, cursor, error, .. }) = &mut state.popup {
+                if let Some(Popup::LibraryDir {
+                    mode,
+                    input,
+                    cursor,
+                    error,
+                    ..
+                }) = &mut state.popup
+                {
                     *mode = DirPopupMode::AddKit;
                     input.clear();
                     *cursor = 0;
@@ -507,7 +665,14 @@ fn handle_library_dir_key(state: &mut AppState, resources: &mut PlayResources, k
                 }
             }
             KeyCode::Char('A') => {
-                if let Some(Popup::LibraryDir { mode, input, cursor, error, .. }) = &mut state.popup {
+                if let Some(Popup::LibraryDir {
+                    mode,
+                    input,
+                    cursor,
+                    error,
+                    ..
+                }) = &mut state.popup
+                {
                     *mode = DirPopupMode::AddMapping;
                     input.clear();
                     *cursor = 0;
@@ -545,7 +710,8 @@ fn handle_library_dir_key(state: &mut AppState, resources: &mut PlayResources, k
                     };
                     save_dir_settings(resources);
                     state.set_status(status_msg);
-                    let new_total = resources.extra_kits_dirs.len() + resources.extra_mapping_dirs.len();
+                    let new_total =
+                        resources.extra_kits_dirs.len() + resources.extra_mapping_dirs.len();
                     if let Some(Popup::LibraryDir { selected, .. }) = &mut state.popup {
                         if new_total == 0 {
                             *selected = 0;
@@ -561,7 +727,14 @@ fn handle_library_dir_key(state: &mut AppState, resources: &mut PlayResources, k
         // Add mode
         match key {
             KeyCode::Esc => {
-                if let Some(Popup::LibraryDir { mode, input, cursor, error, .. }) = &mut state.popup {
+                if let Some(Popup::LibraryDir {
+                    mode,
+                    input,
+                    cursor,
+                    error,
+                    ..
+                }) = &mut state.popup
+                {
                     *mode = DirPopupMode::Browse;
                     input.clear();
                     *cursor = 0;
@@ -569,11 +742,12 @@ fn handle_library_dir_key(state: &mut AppState, resources: &mut PlayResources, k
                 }
             }
             KeyCode::Enter => {
-                let (path_str, is_add_kit) = if let Some(Popup::LibraryDir { mode, input, .. }) = &state.popup {
-                    (input.clone(), matches!(mode, DirPopupMode::AddKit))
-                } else {
-                    return;
-                };
+                let (path_str, is_add_kit) =
+                    if let Some(Popup::LibraryDir { mode, input, .. }) = &state.popup {
+                        (input.clone(), matches!(mode, DirPopupMode::AddKit))
+                    } else {
+                        return;
+                    };
                 let path = PathBuf::from(&path_str);
                 if path.is_dir() {
                     let status_msg = if is_add_kit {
@@ -589,7 +763,14 @@ fn handle_library_dir_key(state: &mut AppState, resources: &mut PlayResources, k
                     };
                     save_dir_settings(resources);
                     state.set_status(status_msg);
-                    if let Some(Popup::LibraryDir { mode, input, cursor, error, .. }) = &mut state.popup {
+                    if let Some(Popup::LibraryDir {
+                        mode,
+                        input,
+                        cursor,
+                        error,
+                        ..
+                    }) = &mut state.popup
+                    {
                         *mode = DirPopupMode::Browse;
                         input.clear();
                         *cursor = 0;
@@ -602,7 +783,13 @@ fn handle_library_dir_key(state: &mut AppState, resources: &mut PlayResources, k
                 }
             }
             other => {
-                if let Some(Popup::LibraryDir { input, cursor, error, .. }) = &mut state.popup {
+                if let Some(Popup::LibraryDir {
+                    input,
+                    cursor,
+                    error,
+                    ..
+                }) = &mut state.popup
+                {
                     handle_text_input_key(input, cursor, Some(error), other);
                 }
             }

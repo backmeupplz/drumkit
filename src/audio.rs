@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::BufferSize;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use rtrb::Consumer;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// An audio output device descriptor
 #[derive(Debug, Clone)]
@@ -17,8 +17,14 @@ pub fn list_output_devices() -> Result<Vec<AudioDevice>> {
     let host = cpal::default_host();
     let mut devices = Vec::new();
 
-    for (i, device) in host.output_devices().context("Failed to enumerate audio output devices")?.enumerate() {
-        let name = device.name().unwrap_or_else(|_| format!("Unknown device {}", i));
+    for (i, device) in host
+        .output_devices()
+        .context("Failed to enumerate audio output devices")?
+        .enumerate()
+    {
+        let name = device
+            .name()
+            .unwrap_or_else(|_| format!("Unknown device {}", i));
         devices.push(AudioDevice { name, index: i });
     }
 
@@ -123,10 +129,7 @@ pub enum AudioCommand {
         note: u8,
     },
     /// Choke (fade out) all playing voices for the given note.
-    Choke {
-        note: u8,
-        fade_frames: usize,
-    },
+    Choke { note: u8, fade_frames: usize },
 }
 
 /// Fade-out state for a voice being choked.
@@ -252,8 +255,7 @@ pub fn run_output_stream(
                         let gain = voice.frame_gain();
                         for c in 0..ch {
                             if voice.position + c < voice.samples.len() {
-                                output[frame * ch + c] +=
-                                    voice.samples[voice.position + c] * gain;
+                                output[frame * ch + c] += voice.samples[voice.position + c] * gain;
                             }
                         }
                         voice.position += ch;
@@ -381,7 +383,11 @@ mod tests {
 
         let cmd = consumer.pop().unwrap();
         match cmd {
-            AudioCommand::Trigger { samples: s, gain, note } => {
+            AudioCommand::Trigger {
+                samples: s,
+                gain,
+                note,
+            } => {
                 assert_eq!(s.len(), 3);
                 assert!((gain - 0.5).abs() < f32::EPSILON);
                 assert_eq!(note, 38);

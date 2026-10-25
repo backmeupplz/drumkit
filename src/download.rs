@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Normalize user input into `owner/repo` format.
 ///
@@ -324,39 +324,66 @@ mod tests {
 
     #[test]
     fn normalize_plain_owner_repo() {
-        assert_eq!(normalize_repo_input("owner/repo"), Some("owner/repo".to_string()));
+        assert_eq!(
+            normalize_repo_input("owner/repo"),
+            Some("owner/repo".to_string())
+        );
     }
 
     #[test]
     fn normalize_https_url() {
-        assert_eq!(normalize_repo_input("https://github.com/owner/repo"), Some("owner/repo".to_string()));
+        assert_eq!(
+            normalize_repo_input("https://github.com/owner/repo"),
+            Some("owner/repo".to_string())
+        );
     }
 
     #[test]
     fn normalize_http_url() {
-        assert_eq!(normalize_repo_input("http://github.com/owner/repo"), Some("owner/repo".to_string()));
+        assert_eq!(
+            normalize_repo_input("http://github.com/owner/repo"),
+            Some("owner/repo".to_string())
+        );
     }
 
     #[test]
     fn normalize_www_url() {
-        assert_eq!(normalize_repo_input("https://www.github.com/owner/repo"), Some("owner/repo".to_string()));
+        assert_eq!(
+            normalize_repo_input("https://www.github.com/owner/repo"),
+            Some("owner/repo".to_string())
+        );
     }
 
     #[test]
     fn normalize_trailing_slash() {
-        assert_eq!(normalize_repo_input("owner/repo/"), Some("owner/repo".to_string()));
-        assert_eq!(normalize_repo_input("https://github.com/owner/repo/"), Some("owner/repo".to_string()));
+        assert_eq!(
+            normalize_repo_input("owner/repo/"),
+            Some("owner/repo".to_string())
+        );
+        assert_eq!(
+            normalize_repo_input("https://github.com/owner/repo/"),
+            Some("owner/repo".to_string())
+        );
     }
 
     #[test]
     fn normalize_github_com_prefix_no_protocol() {
-        assert_eq!(normalize_repo_input("github.com/owner/repo"), Some("owner/repo".to_string()));
-        assert_eq!(normalize_repo_input("github.com/owner/repo/"), Some("owner/repo".to_string()));
+        assert_eq!(
+            normalize_repo_input("github.com/owner/repo"),
+            Some("owner/repo".to_string())
+        );
+        assert_eq!(
+            normalize_repo_input("github.com/owner/repo/"),
+            Some("owner/repo".to_string())
+        );
     }
 
     #[test]
     fn normalize_with_whitespace() {
-        assert_eq!(normalize_repo_input("  owner/repo  "), Some("owner/repo".to_string()));
+        assert_eq!(
+            normalize_repo_input("  owner/repo  "),
+            Some("owner/repo".to_string())
+        );
     }
 
     #[test]

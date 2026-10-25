@@ -9,24 +9,32 @@ pub(crate) mod widgets;
 use anyhow::Result;
 use arc_swap::ArcSwap;
 use crossterm::{
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{widgets::ListState, Terminal};
+use ratatui::{Terminal, widgets::ListState};
 use std::collections::HashMap;
 use std::io::stdout;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Instant;
 
 use crate::{audio, download, kit, mapping, midi, stderr};
 
 /// Events fed into the TUI from various sources.
 pub enum TuiEvent {
-    Hit { note: u8, velocity: u8 },
-    Choke { note: u8 },
-    KitReloaded { note_keys: Vec<u8>, kit_path: PathBuf },
+    Hit {
+        note: u8,
+        velocity: u8,
+    },
+    Choke {
+        note: u8,
+    },
+    KitReloaded {
+        note_keys: Vec<u8>,
+        kit_path: PathBuf,
+    },
     KitReloadError(String),
     KitLoadComplete {
         result: Result<kit::Kit, String>,
@@ -52,10 +60,21 @@ pub enum DirPopupMode {
 
 /// Popup overlays in play mode.
 pub enum Popup {
-    Log { scroll: usize },
-    KitPicker { kits: Vec<kit::DiscoveredKit>, list_state: ListState },
-    AudioPicker { devices: Vec<audio::AudioDevice>, list_state: ListState },
-    MidiPicker { devices: Vec<midi::MidiDevice>, list_state: ListState },
+    Log {
+        scroll: usize,
+    },
+    KitPicker {
+        kits: Vec<kit::DiscoveredKit>,
+        list_state: ListState,
+    },
+    AudioPicker {
+        devices: Vec<audio::AudioDevice>,
+        list_state: ListState,
+    },
+    MidiPicker {
+        devices: Vec<midi::MidiDevice>,
+        list_state: ListState,
+    },
     LibraryDir {
         mode: DirPopupMode,
         selected: usize,
@@ -68,11 +87,25 @@ pub enum Popup {
         progress: Arc<AtomicUsize>,
         total: Arc<AtomicUsize>,
     },
-    MappingPicker { mappings: Vec<mapping::NoteMapping>, list_state: ListState },
-    DeleteMapping { name: String, path: PathBuf, },
-    NoteRename { note: u8, input: String, cursor: usize },
+    MappingPicker {
+        mappings: Vec<mapping::NoteMapping>,
+        list_state: ListState,
+    },
+    DeleteMapping {
+        name: String,
+        path: PathBuf,
+    },
+    NoteRename {
+        note: u8,
+        input: String,
+        cursor: usize,
+    },
     KitStoreFetching,
-    KitStore { kits: Vec<download::RemoteKit>, rows: Vec<download::StoreRow>, list_state: ListState },
+    KitStore {
+        kits: Vec<download::RemoteKit>,
+        rows: Vec<download::StoreRow>,
+        list_state: ListState,
+    },
     KitDownloading {
         kit_name: String,
         progress: Arc<AtomicUsize>,

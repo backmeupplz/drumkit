@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::sample;
 
@@ -192,11 +192,7 @@ fn load_kit_inner(
     let mut entries: Vec<_> = std::fs::read_dir(path)
         .with_context(|| format!("Failed to read kit directory: {}", path.display()))?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| is_audio_file(ext))
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| is_audio_file(ext)))
         .collect();
 
     if entries.is_empty() {
@@ -324,8 +320,12 @@ pub fn load_kit_with_progress(
 ) -> Result<Kit> {
     load_kit_inner(
         path,
-        &mut |count| { total.store(count, Ordering::Relaxed); },
-        &mut || { progress.fetch_add(1, Ordering::Relaxed); },
+        &mut |count| {
+            total.store(count, Ordering::Relaxed);
+        },
+        &mut || {
+            progress.fetch_add(1, Ordering::Relaxed);
+        },
     )
 }
 

@@ -3,16 +3,18 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::widgets::ListState;
 use std::time::Duration;
 
+use super::SetupResult;
 use super::render::setup_ui;
 use super::state::{SetupBgEvent, SetupState, SetupStep, SetupStorePopup};
-use super::SetupResult;
-use crate::tui::input::handle_text_input_key;
-use crate::tui::list_nav::{first_selectable, index_down, index_up, list_down, list_down_skip, list_up, list_up_skip};
-use crate::{audio, download, kit, midi, settings};
 use crate::stderr::StderrCapture;
+use crate::tui::input::handle_text_input_key;
+use crate::tui::list_nav::{
+    first_selectable, index_down, index_up, list_down, list_down_skip, list_up, list_up_skip,
+};
+use crate::{audio, download, kit, midi, settings};
 
 use std::sync::atomic::AtomicUsize;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 
 pub(super) fn setup_event_loop(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
@@ -30,8 +32,7 @@ pub(super) fn setup_event_loop(
         let dirs = state.extra_kits_dirs.clone();
         let repos = state.kit_repos.clone();
         std::thread::spawn(move || {
-            let result = download::fetch_kit_list(&repos, &dirs)
-                .map_err(|e| e.to_string());
+            let result = download::fetch_kit_list(&repos, &dirs).map_err(|e| e.to_string());
             let _ = tx.send(SetupBgEvent::StoreFetched(result));
         });
     }
@@ -53,9 +54,15 @@ pub(super) fn setup_event_loop(
                         Ok(kits) => {
                             let rows = download::build_store_rows(&kits);
                             let mut list_state = ListState::default();
-                            let first = first_selectable(rows.len(), |i| matches!(rows[i], download::StoreRow::Kit(_)));
+                            let first = first_selectable(rows.len(), |i| {
+                                matches!(rows[i], download::StoreRow::Kit(_))
+                            });
                             list_state.select(first);
-                            state.store_popup = Some(SetupStorePopup::Browse { kits, rows, list_state });
+                            state.store_popup = Some(SetupStorePopup::Browse {
+                                kits,
+                                rows,
+                                list_state,
+                            });
                         }
                         Err(e) => {
                             state.error_message = Some(format!("Kit store error: {}", e));
@@ -180,8 +187,8 @@ pub(super) fn setup_event_loop(
                         let dirs = state.extra_kits_dirs.clone();
                         let repos = state.kit_repos.clone();
                         std::thread::spawn(move || {
-                            let result = download::fetch_kit_list(&repos, &dirs)
-                                .map_err(|e| e.to_string());
+                            let result =
+                                download::fetch_kit_list(&repos, &dirs).map_err(|e| e.to_string());
                             let _ = tx.send(SetupBgEvent::StoreFetched(result));
                         });
                     }
@@ -211,13 +218,27 @@ pub(super) fn handle_store_popup_key(
 ) {
     match &mut state.store_popup {
         Some(SetupStorePopup::Fetching) => match key {
-            KeyCode::Esc | KeyCode::Char('s') => { state.store_popup = None; }
-            KeyCode::Char('q') => { state.store_popup = None; state.should_quit = true; }
+            KeyCode::Esc | KeyCode::Char('s') => {
+                state.store_popup = None;
+            }
+            KeyCode::Char('q') => {
+                state.store_popup = None;
+                state.should_quit = true;
+            }
             _ => {}
         },
-        Some(SetupStorePopup::Browse { kits, rows, list_state }) => match key {
-            KeyCode::Esc | KeyCode::Char('s') => { state.store_popup = None; }
-            KeyCode::Char('q') => { state.store_popup = None; state.should_quit = true; }
+        Some(SetupStorePopup::Browse {
+            kits,
+            rows,
+            list_state,
+        }) => match key {
+            KeyCode::Esc | KeyCode::Char('s') => {
+                state.store_popup = None;
+            }
+            KeyCode::Char('q') => {
+                state.store_popup = None;
+                state.should_quit = true;
+            }
             KeyCode::Char('r') => {
                 state.store_popup = Some(SetupStorePopup::Repos {
                     selected: 0,
@@ -228,14 +249,22 @@ pub(super) fn handle_store_popup_key(
                     confirm_delete: false,
                 });
             }
-            KeyCode::Up => list_up_skip(list_state, rows.len(), |i| matches!(rows[i], download::StoreRow::Kit(_))),
-            KeyCode::Down => list_down_skip(list_state, rows.len(), |i| matches!(rows[i], download::StoreRow::Kit(_))),
+            KeyCode::Up => list_up_skip(list_state, rows.len(), |i| {
+                matches!(rows[i], download::StoreRow::Kit(_))
+            }),
+            KeyCode::Down => list_down_skip(list_state, rows.len(), |i| {
+                matches!(rows[i], download::StoreRow::Kit(_))
+            }),
             KeyCode::Enter => {
-                if kits.is_empty() { return; }
+                if kits.is_empty() {
+                    return;
+                }
                 if let Some(sel) = list_state.selected()
                     && let download::StoreRow::Kit(idx) = rows[sel]
                 {
-                    if kits[idx].installed { return; }
+                    if kits[idx].installed {
+                        return;
+                    }
                     let kit_name = kits[idx].name.clone();
                     let kit_repo = kits[idx].repo.clone();
                     let progress = Arc::new(AtomicUsize::new(0));
@@ -264,8 +293,13 @@ pub(super) fn handle_store_popup_key(
             _ => {}
         },
         Some(SetupStorePopup::Downloading { .. }) => match key {
-            KeyCode::Esc => { state.store_popup = None; }
-            KeyCode::Char('q') => { state.store_popup = None; state.should_quit = true; }
+            KeyCode::Esc => {
+                state.store_popup = None;
+            }
+            KeyCode::Char('q') => {
+                state.store_popup = None;
+                state.should_quit = true;
+            }
             _ => {}
         },
         Some(SetupStorePopup::Repos { .. }) => {
@@ -294,7 +328,14 @@ fn handle_repos_popup_key(
     if is_adding {
         match key {
             KeyCode::Esc => {
-                if let Some(SetupStorePopup::Repos { adding, input, cursor, error, .. }) = &mut state.store_popup {
+                if let Some(SetupStorePopup::Repos {
+                    adding,
+                    input,
+                    cursor,
+                    error,
+                    ..
+                }) = &mut state.store_popup
+                {
                     *adding = false;
                     input.clear();
                     *cursor = 0;
@@ -321,7 +362,14 @@ fn handle_repos_popup_key(
                     Some(repo) => {
                         state.kit_repos.push(repo);
                         save_setup_repo_settings(state);
-                        if let Some(SetupStorePopup::Repos { adding, input, cursor, error, .. }) = &mut state.store_popup {
+                        if let Some(SetupStorePopup::Repos {
+                            adding,
+                            input,
+                            cursor,
+                            error,
+                            ..
+                        }) = &mut state.store_popup
+                        {
                             *adding = false;
                             input.clear();
                             *cursor = 0;
@@ -331,7 +379,13 @@ fn handle_repos_popup_key(
                 }
             }
             other => {
-                if let Some(SetupStorePopup::Repos { input, cursor, error, .. }) = &mut state.store_popup {
+                if let Some(SetupStorePopup::Repos {
+                    input,
+                    cursor,
+                    error,
+                    ..
+                }) = &mut state.store_popup
+                {
                     handle_text_input_key(input, cursor, Some(error), other);
                 }
             }
@@ -340,24 +394,33 @@ fn handle_repos_popup_key(
         // Check if we're in confirm_delete mode
         let is_confirming = matches!(
             &state.store_popup,
-            Some(SetupStorePopup::Repos { confirm_delete: true, .. })
+            Some(SetupStorePopup::Repos {
+                confirm_delete: true,
+                ..
+            })
         );
 
         if is_confirming {
             match key {
                 KeyCode::Char('d') | KeyCode::Delete => {
                     // Confirmed: actually delete
-                    let sel = if let Some(SetupStorePopup::Repos { selected, .. }) = &state.store_popup {
-                        *selected
-                    } else {
-                        return;
-                    };
+                    let sel =
+                        if let Some(SetupStorePopup::Repos { selected, .. }) = &state.store_popup {
+                            *selected
+                        } else {
+                            return;
+                        };
                     let len = state.kit_repos.len();
                     if len > 0 && sel < len {
                         state.kit_repos.remove(sel);
                         save_setup_repo_settings(state);
                         let new_len = state.kit_repos.len();
-                        if let Some(SetupStorePopup::Repos { selected, confirm_delete, .. }) = &mut state.store_popup {
+                        if let Some(SetupStorePopup::Repos {
+                            selected,
+                            confirm_delete,
+                            ..
+                        }) = &mut state.store_popup
+                        {
                             *confirm_delete = false;
                             if new_len == 0 {
                                 *selected = 0;
@@ -369,7 +432,9 @@ fn handle_repos_popup_key(
                 }
                 _ => {
                     // Cancel confirmation
-                    if let Some(SetupStorePopup::Repos { confirm_delete, .. }) = &mut state.store_popup {
+                    if let Some(SetupStorePopup::Repos { confirm_delete, .. }) =
+                        &mut state.store_popup
+                    {
                         *confirm_delete = false;
                     }
                 }
@@ -385,14 +450,23 @@ fn handle_repos_popup_key(
                 let dirs = state.extra_kits_dirs.clone();
                 let repos = state.kit_repos.clone();
                 std::thread::spawn(move || {
-                    let result = download::fetch_kit_list(&repos, &dirs)
-                        .map_err(|e| e.to_string());
+                    let result = download::fetch_kit_list(&repos, &dirs).map_err(|e| e.to_string());
                     let _ = tx.send(SetupBgEvent::StoreFetched(result));
                 });
             }
-            KeyCode::Char('q') => { state.store_popup = None; state.should_quit = true; }
+            KeyCode::Char('q') => {
+                state.store_popup = None;
+                state.should_quit = true;
+            }
             KeyCode::Char('a') => {
-                if let Some(SetupStorePopup::Repos { adding, input, cursor, error, .. }) = &mut state.store_popup {
+                if let Some(SetupStorePopup::Repos {
+                    adding,
+                    input,
+                    cursor,
+                    error,
+                    ..
+                }) = &mut state.store_popup
+                {
                     *adding = true;
                     input.clear();
                     *cursor = 0;
@@ -412,13 +486,16 @@ fn handle_repos_popup_key(
                 }
             }
             KeyCode::Delete | KeyCode::Char('d') => {
-                let sel = if let Some(SetupStorePopup::Repos { selected, .. }) = &state.store_popup {
+                let sel = if let Some(SetupStorePopup::Repos { selected, .. }) = &state.store_popup
+                {
                     *selected
                 } else {
                     return;
                 };
                 if !state.kit_repos.is_empty() && sel < state.kit_repos.len() {
-                    if let Some(SetupStorePopup::Repos { confirm_delete, .. }) = &mut state.store_popup {
+                    if let Some(SetupStorePopup::Repos { confirm_delete, .. }) =
+                        &mut state.store_popup
+                    {
                         *confirm_delete = true;
                     }
                 }
@@ -433,9 +510,11 @@ fn rescan_audio(state: &mut SetupState) {
     if let Ok(devices) = audio::list_output_devices() {
         state.audio_devices = devices;
         if !state.audio_devices.is_empty() {
-            let idx = state.saved.audio_device.as_ref().and_then(|name| {
-                state.audio_devices.iter().position(|d| d.name == *name)
-            });
+            let idx = state
+                .saved
+                .audio_device
+                .as_ref()
+                .and_then(|name| state.audio_devices.iter().position(|d| d.name == *name));
             state.audio_list_state.select(Some(idx.unwrap_or(0)));
         } else {
             state.audio_list_state.select(None);
@@ -448,9 +527,11 @@ fn rescan_midi(state: &mut SetupState) {
     if let Ok(devices) = midi::list_devices() {
         state.midi_devices = devices;
         if !state.midi_devices.is_empty() {
-            let idx = state.saved.midi_device.as_ref().and_then(|name| {
-                state.midi_devices.iter().position(|d| d.name == *name)
-            });
+            let idx = state
+                .saved
+                .midi_device
+                .as_ref()
+                .and_then(|name| state.midi_devices.iter().position(|d| d.name == *name));
             state.midi_list_state.select(Some(idx.unwrap_or(0)));
         } else {
             state.midi_list_state.select(None);

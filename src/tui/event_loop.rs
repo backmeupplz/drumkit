@@ -1,13 +1,13 @@
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use notify::Watcher;
-use ratatui::{widgets::ListState, Terminal};
+use ratatui::{Terminal, widgets::ListState};
 use std::io;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use super::list_nav::first_selectable;
-use super::{popups, render, AppState, PlayResources, Popup, TuiEvent};
+use super::{AppState, PlayResources, Popup, TuiEvent, popups, render};
 use crate::{audio, download, kit, mapping, midi, settings};
 
 pub(super) fn event_loop(
@@ -76,31 +76,50 @@ pub(super) fn event_loop(
                             let mut list_state = ListState::default();
                             if !devices.is_empty() {
                                 // Pre-select current device
-                                let sel = devices.iter().position(|d| d.index == resources.audio_device_index).unwrap_or(0);
+                                let sel = devices
+                                    .iter()
+                                    .position(|d| d.index == resources.audio_device_index)
+                                    .unwrap_or(0);
                                 list_state.select(Some(sel));
                             }
-                            state.popup = Some(Popup::AudioPicker { devices, list_state });
+                            state.popup = Some(Popup::AudioPicker {
+                                devices,
+                                list_state,
+                            });
                         }
                     }
                     KeyCode::Char('m') => {
                         if let Ok(devices) = midi::list_devices() {
                             let mut list_state = ListState::default();
                             if !devices.is_empty() {
-                                let sel = devices.iter().position(|d| d.port_index == resources.midi_port_index).unwrap_or(0);
+                                let sel = devices
+                                    .iter()
+                                    .position(|d| d.port_index == resources.midi_port_index)
+                                    .unwrap_or(0);
                                 list_state.select(Some(sel));
                             }
-                            state.popup = Some(Popup::MidiPicker { devices, list_state });
+                            state.popup = Some(Popup::MidiPicker {
+                                devices,
+                                list_state,
+                            });
                         }
                     }
                     KeyCode::Char('n') => {
-                        let mappings = mapping::discover_all_mappings(&resources.extra_mapping_dirs);
+                        let mappings =
+                            mapping::discover_all_mappings(&resources.extra_mapping_dirs);
                         let mut list_state = ListState::default();
                         if !mappings.is_empty() {
                             // Pre-select current mapping
-                            let sel = mappings.iter().position(|m| m.name == state.mapping.name).unwrap_or(0);
+                            let sel = mappings
+                                .iter()
+                                .position(|m| m.name == state.mapping.name)
+                                .unwrap_or(0);
                             list_state.select(Some(sel));
                         }
-                        state.popup = Some(Popup::MappingPicker { mappings, list_state });
+                        state.popup = Some(Popup::MappingPicker {
+                            mappings,
+                            list_state,
+                        });
                     }
                     KeyCode::Char('r') => {
                         // Rename the most recently hit note
@@ -118,8 +137,8 @@ pub(super) fn event_loop(
                         let dirs = resources.extra_kits_dirs.clone();
                         let repos = resources.kit_repos.clone();
                         std::thread::spawn(move || {
-                            let result = download::fetch_kit_list(&repos, &dirs)
-                                .map_err(|e| e.to_string());
+                            let result =
+                                download::fetch_kit_list(&repos, &dirs).map_err(|e| e.to_string());
                             let _ = tx.send(TuiEvent::KitStoreFetched { result });
                         });
                     }
@@ -134,7 +153,10 @@ pub(super) fn event_loop(
                     state.on_hit(note, velocity);
                 }
                 TuiEvent::Choke { note } => state.on_choke(note),
-                TuiEvent::KitReloaded { note_keys, kit_path } => {
+                TuiEvent::KitReloaded {
+                    note_keys,
+                    kit_path,
+                } => {
                     // Ignore stale reload events from the old kit
                     if kit_path != resources.kit_path {
                         continue;
@@ -162,9 +184,15 @@ pub(super) fn event_loop(
                         Ok(kits) => {
                             let rows = download::build_store_rows(&kits);
                             let mut list_state = ListState::default();
-                            let first = first_selectable(rows.len(), |i| matches!(rows[i], download::StoreRow::Kit(_)));
+                            let first = first_selectable(rows.len(), |i| {
+                                matches!(rows[i], download::StoreRow::Kit(_))
+                            });
                             list_state.select(first);
-                            state.popup = Some(Popup::KitStore { kits, rows, list_state });
+                            state.popup = Some(Popup::KitStore {
+                                kits,
+                                rows,
+                                list_state,
+                            });
                         }
                         Err(e) => {
                             state.set_status(format!("Kit store error: {}", e));
@@ -241,7 +269,8 @@ pub(super) fn event_loop(
                                     }
                                     Err(e) => {
                                         // Try to restore old stream
-                                        let (restore_producer, restore_consumer) = rtrb::RingBuffer::new(128);
+                                        let (restore_producer, restore_consumer) =
+                                            rtrb::RingBuffer::new(128);
                                         if let Ok(restored) = audio::run_output_stream(
                                             Some(resources.audio_device_index),
                                             restore_consumer,
@@ -252,10 +281,7 @@ pub(super) fn event_loop(
                                             let mut guard = resources.producer.lock().unwrap();
                                             *guard = Some(restore_producer);
                                         }
-                                        state.set_status(format!(
-                                            "Stream rebuild failed: {}",
-                                            e
-                                        ));
+                                        state.set_status(format!("Stream rebuild failed: {}", e));
                                         state.popup = None;
                                         continue;
                                     }
@@ -266,9 +292,13 @@ pub(super) fn event_loop(
                             resources.shared_notes.store(Arc::new(new_kit.notes));
 
                             // Suppress spurious reload from watcher.watch()
-                            resources.suppress_reload.store(true, std::sync::atomic::Ordering::Relaxed);
+                            resources
+                                .suppress_reload
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
                             let _ = resources.watcher.unwatch(&resources.kit_path);
-                            let _ = resources.watcher.watch(path.as_ref(), notify::RecursiveMode::NonRecursive);
+                            let _ = resources
+                                .watcher
+                                .watch(path.as_ref(), notify::RecursiveMode::NonRecursive);
                             resources.kit_path = path.clone();
                             resources.shared_kit_path.store(Arc::new(path.clone()));
 
@@ -299,6 +329,5 @@ pub(super) fn event_loop(
                 }
             }
         }
-
     }
 }

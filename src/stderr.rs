@@ -89,7 +89,7 @@ mod non_unix {
     }
 }
 
-#[cfg(unix)]
-pub use unix::StderrCapture;
 #[cfg(not(unix))]
 pub use non_unix::StderrCapture;
+#[cfg(unix)]
+pub use unix::StderrCapture;

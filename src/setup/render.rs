@@ -1,18 +1,18 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Clear, List, ListItem, Paragraph, Wrap},
-    Frame,
 };
 use std::sync::atomic::Ordering;
 
 use super::state::{SetupState, SetupStep, SetupStorePopup};
+use crate::download;
 use crate::tui::widgets::{
     content_footer_split, popup_area_fixed, popup_area_percent, render_footer_hint,
     render_progress_popup, render_text_input, styled_block,
 };
-use crate::download;
 
 pub(super) fn render_loading(frame: &mut Frame) {
     let area = frame.area();
@@ -47,7 +47,7 @@ pub(super) fn setup_ui(frame: &mut Frame, state: &SetupState) {
         .constraints([
             Constraint::Length(2), // breadcrumb
             Constraint::Length(1), // title
-            Constraint::Min(1),   // list
+            Constraint::Min(1),    // list
             Constraint::Length(1), // footer
         ])
         .split(inner);
@@ -92,7 +92,10 @@ fn render_breadcrumb(frame: &mut Frame, area: Rect, state: &SetupState) {
         }
     }
 
-    spans.push(Span::styled(" \u{25b8} ", Style::default().fg(Color::DarkGray)));
+    spans.push(Span::styled(
+        " \u{25b8} ",
+        Style::default().fg(Color::DarkGray),
+    ));
 
     // Audio step
     let audio_style = match state.step {
@@ -116,7 +119,10 @@ fn render_breadcrumb(frame: &mut Frame, area: Rect, state: &SetupState) {
         }
     }
 
-    spans.push(Span::styled(" \u{25b8} ", Style::default().fg(Color::DarkGray)));
+    spans.push(Span::styled(
+        " \u{25b8} ",
+        Style::default().fg(Color::DarkGray),
+    ));
 
     // MIDI step
     let midi_style = match state.step {
@@ -326,7 +332,9 @@ fn render_log_popup(frame: &mut Frame, area: Rect, state: &SetupState) {
         frame.render_widget(msg, content_area);
     } else {
         let visible = content_area.height as usize;
-        let start = state.log_scroll.min(state.log_lines.len().saturating_sub(visible));
+        let start = state
+            .log_scroll
+            .min(state.log_lines.len().saturating_sub(visible));
 
         let lines: Vec<Line> = state.log_lines[start..]
             .iter()
@@ -343,7 +351,11 @@ fn render_log_popup(frame: &mut Frame, area: Rect, state: &SetupState) {
         frame.render_widget(paragraph, content_area);
     }
 
-    render_footer_hint(frame, footer_area, " \u{2191}\u{2193} scroll  Esc/l close  q quit");
+    render_footer_hint(
+        frame,
+        footer_area,
+        " \u{2191}\u{2193} scroll  Esc/l close  q quit",
+    );
 }
 
 fn render_setup_footer(frame: &mut Frame, area: Rect, state: &SetupState) {
@@ -394,15 +406,9 @@ fn render_setup_footer(frame: &mut Frame, area: Rect, state: &SetupState) {
     }
 
     hints.push(Span::raw("  "));
-    hints.push(Span::styled(
-        "l log",
-        Style::default().fg(Color::DarkGray),
-    ));
+    hints.push(Span::styled("l log", Style::default().fg(Color::DarkGray)));
     hints.push(Span::raw("  "));
-    hints.push(Span::styled(
-        "q quit",
-        Style::default().fg(Color::DarkGray),
-    ));
+    hints.push(Span::styled("q quit", Style::default().fg(Color::DarkGray)));
 
     frame.render_widget(Paragraph::new(Line::from(hints)), area);
 }
@@ -430,7 +436,11 @@ fn render_store_popup(frame: &mut Frame, area: Rect, store: &SetupStorePopup, st
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
-        SetupStorePopup::Browse { kits, rows, list_state } => {
+        SetupStorePopup::Browse {
+            kits,
+            rows,
+            list_state,
+        } => {
             let popup = popup_area_percent(area);
             frame.render_widget(Clear, popup);
 
@@ -487,15 +497,27 @@ fn render_store_popup(frame: &mut Frame, area: Rect, store: &SetupStorePopup, st
 
                 let list = List::new(items)
                     .highlight_symbol("\u{25b8} ")
-                    .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+                    .highlight_style(
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    );
 
                 let mut ls = list_state.clone();
                 frame.render_stateful_widget(list, content_area, &mut ls);
             }
 
-            render_footer_hint(frame, footer_area, " \u{2191}\u{2193} navigate  Enter download  r repos  Esc/s close  q quit");
+            render_footer_hint(
+                frame,
+                footer_area,
+                " \u{2191}\u{2193} navigate  Enter download  r repos  Esc/s close  q quit",
+            );
         }
-        SetupStorePopup::Downloading { kit_name, progress, total } => {
+        SetupStorePopup::Downloading {
+            kit_name,
+            progress,
+            total,
+        } => {
             let cur = progress.load(Ordering::Relaxed);
             let tot = total.load(Ordering::Relaxed);
             let status = if tot == 0 {
@@ -504,12 +526,36 @@ fn render_store_popup(frame: &mut Frame, area: Rect, store: &SetupStorePopup, st
                 format!("Downloading... {}/{} files", cur, tot)
             };
             render_progress_popup(
-                frame, area, " Downloading Kit ", kit_name, &status, cur, tot,
-                Color::Cyan, "Esc cancel  q quit",
+                frame,
+                area,
+                " Downloading Kit ",
+                kit_name,
+                &status,
+                cur,
+                tot,
+                Color::Cyan,
+                "Esc cancel  q quit",
             );
         }
-        SetupStorePopup::Repos { selected, adding, input, cursor, error, confirm_delete } => {
-            render_repos_popup(frame, area, &state.kit_repos, *selected, *adding, input, *cursor, error.as_deref(), *confirm_delete);
+        SetupStorePopup::Repos {
+            selected,
+            adding,
+            input,
+            cursor,
+            error,
+            confirm_delete,
+        } => {
+            render_repos_popup(
+                frame,
+                area,
+                &state.kit_repos,
+                *selected,
+                *adding,
+                input,
+                *cursor,
+                error.as_deref(),
+                *confirm_delete,
+            );
         }
     }
 }
@@ -560,7 +606,12 @@ fn render_repos_popup(
             frame.render_widget(err_line, err_area);
         }
 
-        let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
+        let footer_area = Rect::new(
+            inner.x,
+            inner.y + inner.height.saturating_sub(1),
+            inner.width,
+            1,
+        );
         render_footer_hint(frame, footer_area, " Enter add  Esc back");
     } else {
         let (content_area, footer_area) = content_footer_split(inner);
@@ -577,7 +628,9 @@ fn render_repos_popup(
                 let is_selected = i == selected;
                 let prefix = if is_selected { " \u{25b8} " } else { "   " };
                 let style = if is_selected {
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::White)
                 };
@@ -589,7 +642,10 @@ fn render_repos_popup(
             if confirm_delete && selected < kit_repos.len() {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
-                    format!(" Remove \"{}\"? Press d again to confirm.", kit_repos[selected]),
+                    format!(
+                        " Remove \"{}\"? Press d again to confirm.",
+                        kit_repos[selected]
+                    ),
                     Style::default().fg(Color::Red),
                 )));
             }
@@ -597,7 +653,11 @@ fn render_repos_popup(
         }
 
         if confirm_delete {
-            render_footer_hint(frame, footer_area, " d confirm remove  any other key cancel");
+            render_footer_hint(
+                frame,
+                footer_area,
+                " d confirm remove  any other key cancel",
+            );
         } else {
             render_footer_hint(frame, footer_area, " a add  d/Del remove  Esc back  q quit");
         }

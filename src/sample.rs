@@ -76,7 +76,9 @@ pub fn load_audio(path: &Path) -> Result<SampleData> {
             continue;
         }
 
-        let decoded = decoder.decode(&packet).context("Failed to decode audio packet")?;
+        let decoded = decoder
+            .decode(&packet)
+            .context("Failed to decode audio packet")?;
 
         let spec = *decoded.spec();
         let num_frames = decoded.frames();
@@ -108,7 +110,6 @@ pub fn load_audio(path: &Path) -> Result<SampleData> {
         channels,
     })
 }
-
 
 #[cfg(test)]
 mod tests {

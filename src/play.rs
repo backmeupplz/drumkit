@@ -2,12 +2,17 @@ use anyhow::Result;
 use arc_swap::ArcSwap;
 use notify::Watcher;
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::{audio, kit, mapping, midi, settings, setup, stderr, tui};
 
-pub fn cmd_play(kit: Option<PathBuf>, port: Option<usize>, device: Option<usize>, kits_dirs: Vec<PathBuf>) -> Result<()> {
+pub fn cmd_play(
+    kit: Option<PathBuf>,
+    port: Option<usize>,
+    device: Option<usize>,
+    kits_dirs: Vec<PathBuf>,
+) -> Result<()> {
     let saved = settings::load_settings();
     let mut all_kit_dirs = saved.extra_kit_dirs.clone();
     for d in &kits_dirs {
@@ -36,7 +41,14 @@ pub fn cmd_play(kit: Option<PathBuf>, port: Option<usize>, device: Option<usize>
             extra_mapping_dirs: extra_mapping_dirs.clone(),
             kit_repos: saved.kit_repos.clone(),
         });
-        return cmd_play_direct(kit_path.clone(), port_idx, dev_idx, all_kit_dirs, extra_mapping_dirs, saved.kit_repos.clone());
+        return cmd_play_direct(
+            kit_path.clone(),
+            port_idx,
+            dev_idx,
+            all_kit_dirs,
+            extra_mapping_dirs,
+            saved.kit_repos.clone(),
+        );
     }
 
     match setup::run_setup(kit, device, port, &all_kit_dirs)? {
@@ -56,13 +68,27 @@ pub fn cmd_play(kit: Option<PathBuf>, port: Option<usize>, device: Option<usize>
                 extra_mapping_dirs: extra_mapping_dirs.clone(),
                 kit_repos: saved.kit_repos.clone(),
             });
-            cmd_play_direct(kit_path, midi_port, audio_device, all_kit_dirs, extra_mapping_dirs, saved.kit_repos)
+            cmd_play_direct(
+                kit_path,
+                midi_port,
+                audio_device,
+                all_kit_dirs,
+                extra_mapping_dirs,
+                saved.kit_repos,
+            )
         }
         setup::SetupResult::Cancelled => Ok(()),
     }
 }
 
-fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, kits_dirs: Vec<PathBuf>, extra_mapping_dirs: Vec<PathBuf>, kit_repos: Vec<String>) -> Result<()> {
+fn cmd_play_direct(
+    kit_path: PathBuf,
+    port_index: usize,
+    audio_device: usize,
+    kits_dirs: Vec<PathBuf>,
+    extra_mapping_dirs: Vec<PathBuf>,
+    kit_repos: Vec<String>,
+) -> Result<()> {
     let mut terminal = tui::init_terminal()?;
     let kit_name_display = kit_path
         .file_name()
@@ -100,7 +126,11 @@ fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, ki
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::DarkGray))
                 .title(" drumkit ")
-                .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+                .title_style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                );
             let inner = outer.inner(area);
             frame.render_widget(outer, area);
 
@@ -129,10 +159,7 @@ fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, ki
                 )),
                 Line::from(vec![
                     Span::raw("  "),
-                    Span::styled(
-                        "\u{2588}".repeat(filled),
-                        Style::default().fg(Color::Cyan),
-                    ),
+                    Span::styled("\u{2588}".repeat(filled), Style::default().fg(Color::Cyan)),
                     Span::styled(
                         "\u{2591}".repeat(empty),
                         Style::default().fg(Color::Rgb(50, 50, 60)),
@@ -154,7 +181,16 @@ fn cmd_play_direct(kit_path: PathBuf, port_index: usize, audio_device: usize, ki
         }
     };
 
-    match cmd_play_direct_inner(terminal, kit_path, loaded_kit, port_index, audio_device, kits_dirs, extra_mapping_dirs, kit_repos) {
+    match cmd_play_direct_inner(
+        terminal,
+        kit_path,
+        loaded_kit,
+        port_index,
+        audio_device,
+        kits_dirs,
+        extra_mapping_dirs,
+        kit_repos,
+    ) {
         Ok(()) => Ok(()),
         Err(e) => {
             tui::restore_terminal();
@@ -175,8 +211,8 @@ fn cmd_play_direct_inner(
 ) -> Result<()> {
     let capture = stderr::StderrCapture::start();
 
-    let initial_mapping = mapping::load_kit_mapping(&kit_path)
-        .unwrap_or_else(mapping::default_mapping);
+    let initial_mapping =
+        mapping::load_kit_mapping(&kit_path).unwrap_or_else(mapping::default_mapping);
     let shared_mapping = Arc::new(ArcSwap::from_pointee(initial_mapping));
 
     let kit_summary = kit::summary_lines(&loaded_kit, &shared_mapping.load());
@@ -187,7 +223,12 @@ fn cmd_play_direct_inner(
     let (producer, consumer) = rtrb::RingBuffer::new(128);
     let shared_producer = Arc::new(Mutex::new(Some(producer)));
 
-    let stream = audio::run_output_stream(Some(audio_device), consumer, loaded_kit.sample_rate, loaded_kit.channels)?;
+    let stream = audio::run_output_stream(
+        Some(audio_device),
+        consumer,
+        loaded_kit.sample_rate,
+        loaded_kit.channels,
+    )?;
 
     let midi_device_name = midi::list_devices()?
         .into_iter()
@@ -212,11 +253,12 @@ fn cmd_play_direct_inner(
     )?;
 
     let (watch_tx, watch_rx) = mpsc::channel();
-    let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
-        if let Ok(_event) = res {
-            let _ = watch_tx.send(());
-        }
-    })?;
+    let mut watcher =
+        notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+            if let Ok(_event) = res {
+                let _ = watch_tx.send(());
+            }
+        })?;
     watcher.watch(kit_path.as_ref(), notify::RecursiveMode::NonRecursive)?;
 
     let stream_sample_rate = loaded_kit.sample_rate;
@@ -263,12 +305,21 @@ fn cmd_play_direct_inner(
                                 } else {
                                     let note_keys = kit::note_keys(&new_kit.notes);
                                     debounce_shared_notes.store(Arc::new(new_kit.notes));
-                                    if let Some(new_mapping) = mapping::load_kit_mapping(&current_path) {
-                                        debounce_shared_mapping.store(Arc::new(new_mapping.clone()));
-                                        let _ = debounce_tui_tx.send(tui::TuiEvent::MappingReloaded(new_mapping, current_path.to_path_buf()));
+                                    if let Some(new_mapping) =
+                                        mapping::load_kit_mapping(&current_path)
+                                    {
+                                        debounce_shared_mapping
+                                            .store(Arc::new(new_mapping.clone()));
+                                        let _ =
+                                            debounce_tui_tx.send(tui::TuiEvent::MappingReloaded(
+                                                new_mapping,
+                                                current_path.to_path_buf(),
+                                            ));
                                     }
-                                    let _ = debounce_tui_tx
-                                        .send(tui::TuiEvent::KitReloaded { note_keys, kit_path: (*current_path).to_path_buf() });
+                                    let _ = debounce_tui_tx.send(tui::TuiEvent::KitReloaded {
+                                        note_keys,
+                                        kit_path: (*current_path).to_path_buf(),
+                                    });
                                 }
                             }
                             Err(e) => {

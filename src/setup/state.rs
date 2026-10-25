@@ -1,7 +1,7 @@
 use ratatui::widgets::ListState;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
 use crate::audio;
 use crate::download;
@@ -20,7 +20,11 @@ pub(super) enum SetupStep {
 /// Store popup overlay states for the setup flow.
 pub(super) enum SetupStorePopup {
     Fetching,
-    Browse { kits: Vec<download::RemoteKit>, rows: Vec<download::StoreRow>, list_state: ListState },
+    Browse {
+        kits: Vec<download::RemoteKit>,
+        rows: Vec<download::StoreRow>,
+        list_state: ListState,
+    },
     Downloading {
         kit_name: String,
         progress: Arc<AtomicUsize>,
@@ -39,7 +43,10 @@ pub(super) enum SetupStorePopup {
 /// Events from background threads in the setup flow.
 pub(super) enum SetupBgEvent {
     StoreFetched(Result<Vec<download::RemoteKit>, String>),
-    StoreDownloaded { result: Result<PathBuf, String>, kit_name: String },
+    StoreDownloaded {
+        result: Result<PathBuf, String>,
+        kit_name: String,
+    },
 }
 
 /// Internal state for the setup TUI.

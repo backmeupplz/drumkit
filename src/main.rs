@@ -89,9 +89,17 @@ fn main() -> Result<()> {
         Commands::Monitor { port } => commands::cmd_monitor(port),
         Commands::AudioDevices => commands::cmd_audio_devices(),
         Commands::TestSound { file, device } => commands::cmd_test_sound(file, device),
-        Commands::TestTrigger { file, note, port, device } => {
-            commands::cmd_test_trigger(file, note, port, device)
-        }
-        Commands::Play { kit, port, device, kits_dirs } => play::cmd_play(kit, port, device, kits_dirs),
+        Commands::TestTrigger {
+            file,
+            note,
+            port,
+            device,
+        } => commands::cmd_test_trigger(file, note, port, device),
+        Commands::Play {
+            kit,
+            port,
+            device,
+            kits_dirs,
+        } => play::cmd_play(kit, port, device, kits_dirs),
     }
 }

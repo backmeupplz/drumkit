@@ -1,13 +1,13 @@
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Clear, List, ListItem, ListState, Paragraph, Wrap},
-    Frame,
 };
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::widgets::{
     content_footer_split, popup_area_fixed, popup_area_percent, render_footer_hint,
@@ -16,21 +16,87 @@ use super::widgets::{
 use super::{AppState, DirPopupMode, Popup};
 use crate::{audio, download, kit, mapping, midi};
 
-pub(super) fn render_popup(frame: &mut Frame, area: Rect, popup: &Popup, state: &AppState, extra_kit_dirs: &[PathBuf], extra_mapping_dirs: &[PathBuf], kit_repos: &[String]) {
+pub(super) fn render_popup(
+    frame: &mut Frame,
+    area: Rect,
+    popup: &Popup,
+    state: &AppState,
+    extra_kit_dirs: &[PathBuf],
+    extra_mapping_dirs: &[PathBuf],
+    kit_repos: &[String],
+) {
     match popup {
         Popup::Log { scroll } => render_log_popup(frame, area, state, *scroll),
         Popup::KitPicker { kits, list_state } => render_kit_popup(frame, area, kits, list_state),
-        Popup::AudioPicker { devices, list_state } => render_audio_popup(frame, area, devices, list_state),
-        Popup::MidiPicker { devices, list_state } => render_midi_popup(frame, area, devices, list_state),
-        Popup::LibraryDir { mode, selected, input, cursor, error } => render_library_dir_popup(frame, area, mode, *selected, input, *cursor, error.as_deref(), extra_kit_dirs, extra_mapping_dirs),
-        Popup::Loading { kit_name, progress, total } => render_loading_popup(frame, area, kit_name, progress, total),
-        Popup::MappingPicker { mappings, list_state } => render_mapping_popup(frame, area, mappings, list_state, state),
+        Popup::AudioPicker {
+            devices,
+            list_state,
+        } => render_audio_popup(frame, area, devices, list_state),
+        Popup::MidiPicker {
+            devices,
+            list_state,
+        } => render_midi_popup(frame, area, devices, list_state),
+        Popup::LibraryDir {
+            mode,
+            selected,
+            input,
+            cursor,
+            error,
+        } => render_library_dir_popup(
+            frame,
+            area,
+            mode,
+            *selected,
+            input,
+            *cursor,
+            error.as_deref(),
+            extra_kit_dirs,
+            extra_mapping_dirs,
+        ),
+        Popup::Loading {
+            kit_name,
+            progress,
+            total,
+        } => render_loading_popup(frame, area, kit_name, progress, total),
+        Popup::MappingPicker {
+            mappings,
+            list_state,
+        } => render_mapping_popup(frame, area, mappings, list_state, state),
         Popup::DeleteMapping { name, .. } => render_delete_mapping_popup(frame, area, name),
-        Popup::NoteRename { note, input, cursor } => render_note_rename_popup(frame, area, *note, input, *cursor),
+        Popup::NoteRename {
+            note,
+            input,
+            cursor,
+        } => render_note_rename_popup(frame, area, *note, input, *cursor),
         Popup::KitStoreFetching => render_kit_store_fetching(frame, area),
-        Popup::KitStore { kits, rows, list_state } => render_kit_store(frame, area, kits, rows, list_state),
-        Popup::KitDownloading { kit_name, progress, total } => render_kit_downloading(frame, area, kit_name, progress, total),
-        Popup::KitStoreRepos { selected, adding, input, cursor, error, confirm_delete } => render_kit_store_repos(frame, area, kit_repos, *selected, *adding, input, *cursor, error.as_deref(), *confirm_delete),
+        Popup::KitStore {
+            kits,
+            rows,
+            list_state,
+        } => render_kit_store(frame, area, kits, rows, list_state),
+        Popup::KitDownloading {
+            kit_name,
+            progress,
+            total,
+        } => render_kit_downloading(frame, area, kit_name, progress, total),
+        Popup::KitStoreRepos {
+            selected,
+            adding,
+            input,
+            cursor,
+            error,
+            confirm_delete,
+        } => render_kit_store_repos(
+            frame,
+            area,
+            kit_repos,
+            *selected,
+            *adding,
+            input,
+            *cursor,
+            error.as_deref(),
+            *confirm_delete,
+        ),
     }
 }
 
@@ -62,17 +128,31 @@ fn render_log_popup(frame: &mut Frame, area: Rect, state: &AppState, scroll: usi
         let lines: Vec<Line> = state.log_lines[start..]
             .iter()
             .take(visible)
-            .map(|l| Line::from(Span::styled(format!(" {}", l), Style::default().fg(Color::DarkGray))))
+            .map(|l| {
+                Line::from(Span::styled(
+                    format!(" {}", l),
+                    Style::default().fg(Color::DarkGray),
+                ))
+            })
             .collect();
 
         let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
         frame.render_widget(paragraph, content_area);
     }
 
-    render_footer_hint(frame, footer_area, " \u{2191}\u{2193} scroll  Esc/l close  q quit");
+    render_footer_hint(
+        frame,
+        footer_area,
+        " \u{2191}\u{2193} scroll  Esc/l close  q quit",
+    );
 }
 
-fn render_kit_popup(frame: &mut Frame, area: Rect, kits: &[kit::DiscoveredKit], list_state: &ListState) {
+fn render_kit_popup(
+    frame: &mut Frame,
+    area: Rect,
+    kits: &[kit::DiscoveredKit],
+    list_state: &ListState,
+) {
     let popup = popup_area_percent(area);
     frame.render_widget(Clear, popup);
 
@@ -109,16 +189,29 @@ fn render_kit_popup(frame: &mut Frame, area: Rect, kits: &[kit::DiscoveredKit], 
 
         let list = List::new(items)
             .highlight_symbol("\u{25b8} ")
-            .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            );
 
         let mut ls = list_state.clone();
         frame.render_stateful_widget(list, content_area, &mut ls);
     }
 
-    render_footer_hint(frame, footer_area, " \u{2191}\u{2193} navigate  Enter select  s store  Esc/k close  q quit");
+    render_footer_hint(
+        frame,
+        footer_area,
+        " \u{2191}\u{2193} navigate  Enter select  s store  Esc/k close  q quit",
+    );
 }
 
-fn render_audio_popup(frame: &mut Frame, area: Rect, devices: &[audio::AudioDevice], list_state: &ListState) {
+fn render_audio_popup(
+    frame: &mut Frame,
+    area: Rect,
+    devices: &[audio::AudioDevice],
+    list_state: &ListState,
+) {
     let popup = popup_area_percent(area);
     frame.render_widget(Clear, popup);
 
@@ -146,16 +239,29 @@ fn render_audio_popup(frame: &mut Frame, area: Rect, devices: &[audio::AudioDevi
 
         let list = List::new(items)
             .highlight_symbol("\u{25b8} ")
-            .highlight_style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD));
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            );
 
         let mut ls = list_state.clone();
         frame.render_stateful_widget(list, content_area, &mut ls);
     }
 
-    render_footer_hint(frame, footer_area, " \u{2191}\u{2193} navigate  Enter select  Esc/a close  q quit");
+    render_footer_hint(
+        frame,
+        footer_area,
+        " \u{2191}\u{2193} navigate  Enter select  Esc/a close  q quit",
+    );
 }
 
-fn render_midi_popup(frame: &mut Frame, area: Rect, devices: &[midi::MidiDevice], list_state: &ListState) {
+fn render_midi_popup(
+    frame: &mut Frame,
+    area: Rect,
+    devices: &[midi::MidiDevice],
+    list_state: &ListState,
+) {
     let popup = popup_area_percent(area);
     frame.render_widget(Clear, popup);
 
@@ -183,13 +289,21 @@ fn render_midi_popup(frame: &mut Frame, area: Rect, devices: &[midi::MidiDevice]
 
         let list = List::new(items)
             .highlight_symbol("\u{25b8} ")
-            .highlight_style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD));
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            );
 
         let mut ls = list_state.clone();
         frame.render_stateful_widget(list, content_area, &mut ls);
     }
 
-    render_footer_hint(frame, footer_area, " \u{2191}\u{2193} navigate  Enter select  Esc/m close  q quit");
+    render_footer_hint(
+        frame,
+        footer_area,
+        " \u{2191}\u{2193} navigate  Enter select  Esc/m close  q quit",
+    );
 }
 
 fn render_mapping_popup(
@@ -210,9 +324,24 @@ fn render_mapping_popup(
         return;
     }
 
-    let content_area = Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(2));
-    let path_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(2), inner.width, 1);
-    let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
+    let content_area = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(2),
+    );
+    let path_area = Rect::new(
+        inner.x,
+        inner.y + inner.height.saturating_sub(2),
+        inner.width,
+        1,
+    );
+    let footer_area = Rect::new(
+        inner.x,
+        inner.y + inner.height.saturating_sub(1),
+        inner.width,
+        1,
+    );
 
     if mappings.is_empty() {
         let msg = Paragraph::new(Line::from(Span::styled(
@@ -229,7 +358,11 @@ fn render_mapping_popup(
                     mapping::MappingSource::UserFile(_) => " (user)",
                     mapping::MappingSource::KitFile(_) => " (kit)",
                 };
-                let current = if m.name == state.mapping.name { " *" } else { "" };
+                let current = if m.name == state.mapping.name {
+                    " *"
+                } else {
+                    ""
+                };
                 ListItem::new(Line::from(vec![
                     Span::raw(" "),
                     Span::raw(&m.name),
@@ -241,15 +374,27 @@ fn render_mapping_popup(
 
         let list = List::new(items)
             .highlight_symbol("\u{25b8} ")
-            .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            );
 
         let mut ls = list_state.clone();
         frame.render_stateful_widget(list, content_area, &mut ls);
     }
 
     let mappings_dir = mapping::user_mappings_dir();
-    render_footer_hint(frame, path_area, &format!(" User: {}", mappings_dir.display()));
-    render_footer_hint(frame, footer_area, " \u{2191}\u{2193} navigate  Enter select  d delete  Esc/n close  q quit");
+    render_footer_hint(
+        frame,
+        path_area,
+        &format!(" User: {}", mappings_dir.display()),
+    );
+    render_footer_hint(
+        frame,
+        footer_area,
+        " \u{2191}\u{2193} navigate  Enter select  d delete  Esc/n close  q quit",
+    );
 }
 
 fn render_delete_mapping_popup(frame: &mut Frame, area: Rect, name: &str) {
@@ -278,13 +423,7 @@ fn render_delete_mapping_popup(frame: &mut Frame, area: Rect, name: &str) {
     render_footer_hint(frame, footer_area, " y/Enter confirm  any other key cancel");
 }
 
-fn render_note_rename_popup(
-    frame: &mut Frame,
-    area: Rect,
-    note: u8,
-    input: &str,
-    cursor: usize,
-) {
+fn render_note_rename_popup(frame: &mut Frame, area: Rect, note: u8, input: &str, cursor: usize) {
     let popup = popup_area_fixed(area, 40, 7);
     frame.render_widget(Clear, popup);
 
@@ -315,7 +454,12 @@ fn render_note_rename_popup(
 
     // Footer
     if inner.height >= 3 {
-        let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
+        let footer_area = Rect::new(
+            inner.x,
+            inner.y + inner.height.saturating_sub(1),
+            inner.width,
+            1,
+        );
         render_footer_hint(frame, footer_area, " Enter save  Esc cancel");
     }
 }
@@ -335,8 +479,15 @@ fn render_loading_popup(
         format!("Loading... {}/{} files", cur, tot)
     };
     render_progress_popup(
-        frame, area, " Loading Kit ", kit_name, &status, cur, tot,
-        Color::Cyan, "Esc cancel  q quit",
+        frame,
+        area,
+        " Loading Kit ",
+        kit_name,
+        &status,
+        cur,
+        tot,
+        Color::Cyan,
+        "Esc cancel  q quit",
     );
 }
 
@@ -395,7 +546,9 @@ fn render_browse_mode(
     // Kit directories section
     lines.push(Line::from(Span::styled(
         " Kit directories:",
-        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
     )));
     for d in &builtin_kit {
         lines.push(Line::from(Span::styled(
@@ -410,7 +563,9 @@ fn render_browse_mode(
         let is_selected = user_idx == selected;
         let prefix = if is_selected { " \u{25b8} " } else { "   " };
         let style = if is_selected {
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Green)
         };
@@ -426,7 +581,9 @@ fn render_browse_mode(
     // Mapping directories section
     lines.push(Line::from(Span::styled(
         " Mapping directories:",
-        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(Span::styled(
         format!("   {}", builtin_mapping_dir.display()),
@@ -438,7 +595,9 @@ fn render_browse_mode(
         let is_selected = user_idx == selected;
         let prefix = if is_selected { " \u{25b8} " } else { "   " };
         let style = if is_selected {
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Green)
         };
@@ -452,7 +611,11 @@ fn render_browse_mode(
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, content_area);
 
-    render_footer_hint(frame, footer_area, " a add kit dir  A add mapping dir  Del remove  Esc close  q quit");
+    render_footer_hint(
+        frame,
+        footer_area,
+        " a add kit dir  A add mapping dir  Del remove  Esc close  q quit",
+    );
 }
 
 fn render_add_mode(
@@ -489,7 +652,12 @@ fn render_add_mode(
     }
 
     // Footer
-    let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
+    let footer_area = Rect::new(
+        inner.x,
+        inner.y + inner.height.saturating_sub(1),
+        inner.width,
+        1,
+    );
     render_footer_hint(frame, footer_area, " Enter add  Esc back");
 }
 
@@ -545,20 +713,15 @@ fn render_kit_store(
         let items: Vec<ListItem> = rows
             .iter()
             .map(|row| match row {
-                download::StoreRow::RepoHeader(repo) => {
-                    ListItem::new(Line::from(Span::styled(
-                        format!(" \u{2500}\u{2500} {} \u{2500}\u{2500}", repo),
-                        Style::default().fg(Color::DarkGray),
-                    )))
-                }
+                download::StoreRow::RepoHeader(repo) => ListItem::new(Line::from(Span::styled(
+                    format!(" \u{2500}\u{2500} {} \u{2500}\u{2500}", repo),
+                    Style::default().fg(Color::DarkGray),
+                ))),
                 download::StoreRow::Kit(idx) => {
                     let kit = &kits[*idx];
                     let mut spans = vec![Span::raw(" ")];
                     if kit.installed {
-                        spans.push(Span::styled(
-                            "\u{2713} ",
-                            Style::default().fg(Color::Green),
-                        ));
+                        spans.push(Span::styled("\u{2713} ", Style::default().fg(Color::Green)));
                     } else {
                         spans.push(Span::raw("  "));
                     }
@@ -578,13 +741,21 @@ fn render_kit_store(
 
         let list = List::new(items)
             .highlight_symbol("\u{25b8} ")
-            .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            );
 
         let mut ls = list_state.clone();
         frame.render_stateful_widget(list, content_area, &mut ls);
     }
 
-    render_footer_hint(frame, footer_area, " \u{2191}\u{2193} navigate  Enter download  r repos  Esc/s close  q quit");
+    render_footer_hint(
+        frame,
+        footer_area,
+        " \u{2191}\u{2193} navigate  Enter download  r repos  Esc/s close  q quit",
+    );
 }
 
 fn render_kit_store_repos(
@@ -634,7 +805,12 @@ fn render_kit_store_repos(
             frame.render_widget(err_line, err_area);
         }
 
-        let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
+        let footer_area = Rect::new(
+            inner.x,
+            inner.y + inner.height.saturating_sub(1),
+            inner.width,
+            1,
+        );
         render_footer_hint(frame, footer_area, " Enter add  Esc back");
     } else {
         // Browse mode: list repos
@@ -652,7 +828,9 @@ fn render_kit_store_repos(
                 let is_selected = i == selected;
                 let prefix = if is_selected { " \u{25b8} " } else { "   " };
                 let style = if is_selected {
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::White)
                 };
@@ -664,7 +842,10 @@ fn render_kit_store_repos(
             if confirm_delete && selected < kit_repos.len() {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
-                    format!(" Remove \"{}\"? Press d again to confirm.", kit_repos[selected]),
+                    format!(
+                        " Remove \"{}\"? Press d again to confirm.",
+                        kit_repos[selected]
+                    ),
                     Style::default().fg(Color::Red),
                 )));
             }
@@ -672,7 +853,11 @@ fn render_kit_store_repos(
         }
 
         if confirm_delete {
-            render_footer_hint(frame, footer_area, " d confirm remove  any other key cancel");
+            render_footer_hint(
+                frame,
+                footer_area,
+                " d confirm remove  any other key cancel",
+            );
         } else {
             render_footer_hint(frame, footer_area, " a add  d/Del remove  Esc back  q quit");
         }
@@ -694,7 +879,14 @@ fn render_kit_downloading(
         format!("Downloading... {}/{} files", cur, tot)
     };
     render_progress_popup(
-        frame, area, " Downloading Kit ", kit_name, &status, cur, tot,
-        Color::Cyan, "Esc cancel  q quit",
+        frame,
+        area,
+        " Downloading Kit ",
+        kit_name,
+        &status,
+        cur,
+        tot,
+        Color::Cyan,
+        "Esc cancel  q quit",
     );
 }

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use crossterm::style::{self, Stylize};
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 
 use crate::{audio, mapping, midi, sample};
 
@@ -50,10 +50,7 @@ pub fn select_port(devices: &[midi::MidiDevice]) -> Result<usize> {
 
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
-    let port: usize = input
-        .trim()
-        .parse()
-        .context("Invalid port number")?;
+    let port: usize = input.trim().parse().context("Invalid port number")?;
 
     if port >= devices.len() {
         anyhow::bail!("Port index {} out of range (0-{})", port, devices.len() - 1);
@@ -74,13 +71,14 @@ pub fn select_audio_device(devices: &[audio::AudioDevice]) -> Result<usize> {
 
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
-    let idx: usize = input
-        .trim()
-        .parse()
-        .context("Invalid device number")?;
+    let idx: usize = input.trim().parse().context("Invalid device number")?;
 
     if idx >= devices.len() {
-        anyhow::bail!("Device index {} out of range (0-{})", idx, devices.len() - 1);
+        anyhow::bail!(
+            "Device index {} out of range (0-{})",
+            idx,
+            devices.len() - 1
+        );
     }
 
     Ok(idx)
@@ -114,11 +112,7 @@ pub fn cmd_monitor(port: Option<usize>) -> Result<()> {
     let port_index = match port {
         Some(p) => {
             if p >= devices.len() {
-                anyhow::bail!(
-                    "Port index {} out of range (0-{})",
-                    p,
-                    devices.len() - 1
-                );
+                anyhow::bail!("Port index {} out of range (0-{})", p, devices.len() - 1);
             }
             p
         }
@@ -129,13 +123,11 @@ pub fn cmd_monitor(port: Option<usize>) -> Result<()> {
     println!();
     println!(
         "{}",
-        format!("Connected to: {}", device_name)
-            .with(style::Color::Green)
+        format!("Connected to: {}", device_name).with(style::Color::Green)
     );
     println!(
         "{}",
-        "Hit your pads! Press Ctrl+C to quit."
-            .with(style::Color::DarkGrey)
+        "Hit your pads! Press Ctrl+C to quit.".with(style::Color::DarkGrey)
     );
     println!();
 
@@ -214,7 +206,12 @@ pub fn cmd_test_sound(file: PathBuf, device: Option<usize>) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_test_trigger(file: PathBuf, note: u8, port: Option<usize>, device: Option<usize>) -> Result<()> {
+pub fn cmd_test_trigger(
+    file: PathBuf,
+    note: u8,
+    port: Option<usize>,
+    device: Option<usize>,
+) -> Result<()> {
     let device = resolve_audio_device(device)?;
     let data = sample::load_audio(&file)?;
     let duration_s = data.samples.len() as f64 / (data.sample_rate as f64 * data.channels as f64);
@@ -240,11 +237,7 @@ pub fn cmd_test_trigger(file: PathBuf, note: u8, port: Option<usize>, device: Op
     let port_index = match port {
         Some(p) => {
             if p >= devices.len() {
-                anyhow::bail!(
-                    "Port index {} out of range (0-{})",
-                    p,
-                    devices.len() - 1
-                );
+                anyhow::bail!("Port index {} out of range (0-{})", p, devices.len() - 1);
             }
             p
         }
@@ -276,18 +269,15 @@ pub fn cmd_test_trigger(file: PathBuf, note: u8, port: Option<usize>, device: Op
     println!();
     println!(
         "{}",
-        format!("Listening on: {}", devices[port_index].name)
-            .with(style::Color::Green)
+        format!("Listening on: {}", devices[port_index].name).with(style::Color::Green)
     );
     println!(
         "{}",
-        format!("Trigger note: {} ({})", note, drum)
-            .with(style::Color::Cyan)
+        format!("Trigger note: {} ({})", note, drum).with(style::Color::Cyan)
     );
     println!(
         "{}",
-        "Hit the pad! Press Ctrl+C to quit."
-            .with(style::Color::DarkGrey)
+        "Hit the pad! Press Ctrl+C to quit.".with(style::Color::DarkGrey)
     );
 
     std::thread::park();

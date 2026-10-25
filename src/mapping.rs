@@ -49,10 +49,7 @@ impl NoteMapping {
 
     /// Look up the choke targets for a MIDI note (empty slice if none).
     pub fn choke_targets(&self, note: u8) -> &[u8] {
-        self.chokes
-            .get(&note)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
+        self.chokes.get(&note).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     /// Set or update the name for a MIDI note.
@@ -69,24 +66,29 @@ impl NoteMapping {
 
 /// Parse a TOML string into a `NoteMapping`.
 pub fn parse_mapping(toml_str: &str, source: MappingSource) -> Result<NoteMapping> {
-    let file: MappingFile =
-        toml::from_str(toml_str).context("Failed to parse mapping TOML")?;
+    let file: MappingFile = toml::from_str(toml_str).context("Failed to parse mapping TOML")?;
 
     let mut notes = HashMap::new();
     for (k, v) in file.notes {
-        let note: u8 = k.parse().with_context(|| format!("Invalid note number: {}", k))?;
+        let note: u8 = k
+            .parse()
+            .with_context(|| format!("Invalid note number: {}", k))?;
         notes.insert(note, v);
     }
 
     let mut chokes = HashMap::new();
     for (k, v) in file.chokes {
-        let note: u8 = k.parse().with_context(|| format!("Invalid choke note: {}", k))?;
+        let note: u8 = k
+            .parse()
+            .with_context(|| format!("Invalid choke note: {}", k))?;
         chokes.insert(note, v);
     }
 
     let mut remap = HashMap::new();
     for (k, v) in file.remap {
-        let note: u8 = k.parse().with_context(|| format!("Invalid remap note: {}", k))?;
+        let note: u8 = k
+            .parse()
+            .with_context(|| format!("Invalid remap note: {}", k))?;
         remap.insert(note, v);
     }
 
@@ -130,30 +132,67 @@ pub fn serialize_mapping(mapping: &NoteMapping) -> Result<String> {
 /// is somehow broken. Contains the core GM drum names and hi-hat choke rules.
 fn fallback_mapping() -> NoteMapping {
     let notes: HashMap<u8, String> = [
-        (21, "HH Splash"), (23, "HH Half-Open"), (35, "Bass Drum 2"),
-        (36, "Kick"), (37, "Side Stick"), (38, "Snare"),
-        (39, "Hand Clap"), (40, "Snare Rim"), (41, "Low Floor Tom"),
-        (42, "Closed Hi-Hat"), (43, "High Floor Tom"), (44, "Pedal Hi-Hat"),
-        (45, "Low Tom"), (46, "Open Hi-Hat"), (47, "Low-Mid Tom"),
-        (48, "Hi-Mid Tom"), (49, "Crash 1"), (50, "High Tom"),
-        (51, "Ride"), (52, "Chinese Cymbal"), (53, "Ride Bell"),
-        (54, "Tambourine"), (55, "Splash Cymbal"), (56, "Cowbell"),
-        (57, "Crash 2"), (58, "Vibraslap"), (59, "Ride 2"),
-        (60, "Hi Bongo"), (61, "Low Bongo"), (62, "Mute Hi Conga"),
-        (63, "Open Hi Conga"), (64, "Low Conga"), (65, "High Timbale"),
-        (66, "Low Timbale"), (67, "High Agogo"), (68, "Low Agogo"),
-        (69, "Cabasa"), (70, "Maracas"), (71, "Short Whistle"),
-        (72, "Long Whistle"), (73, "Short Guiro"), (74, "Long Guiro"),
-        (75, "Claves"), (76, "Hi Wood Block"), (77, "Low Wood Block"),
-        (78, "Mute Cuica"), (79, "Open Cuica"), (80, "Mute Triangle"),
+        (21, "HH Splash"),
+        (23, "HH Half-Open"),
+        (35, "Bass Drum 2"),
+        (36, "Kick"),
+        (37, "Side Stick"),
+        (38, "Snare"),
+        (39, "Hand Clap"),
+        (40, "Snare Rim"),
+        (41, "Low Floor Tom"),
+        (42, "Closed Hi-Hat"),
+        (43, "High Floor Tom"),
+        (44, "Pedal Hi-Hat"),
+        (45, "Low Tom"),
+        (46, "Open Hi-Hat"),
+        (47, "Low-Mid Tom"),
+        (48, "Hi-Mid Tom"),
+        (49, "Crash 1"),
+        (50, "High Tom"),
+        (51, "Ride"),
+        (52, "Chinese Cymbal"),
+        (53, "Ride Bell"),
+        (54, "Tambourine"),
+        (55, "Splash Cymbal"),
+        (56, "Cowbell"),
+        (57, "Crash 2"),
+        (58, "Vibraslap"),
+        (59, "Ride 2"),
+        (60, "Hi Bongo"),
+        (61, "Low Bongo"),
+        (62, "Mute Hi Conga"),
+        (63, "Open Hi Conga"),
+        (64, "Low Conga"),
+        (65, "High Timbale"),
+        (66, "Low Timbale"),
+        (67, "High Agogo"),
+        (68, "Low Agogo"),
+        (69, "Cabasa"),
+        (70, "Maracas"),
+        (71, "Short Whistle"),
+        (72, "Long Whistle"),
+        (73, "Short Guiro"),
+        (74, "Long Guiro"),
+        (75, "Claves"),
+        (76, "Hi Wood Block"),
+        (77, "Low Wood Block"),
+        (78, "Mute Cuica"),
+        (79, "Open Cuica"),
+        (80, "Mute Triangle"),
         (81, "Open Triangle"),
-    ].into_iter().map(|(n, s)| (n, s.to_string())).collect();
+    ]
+    .into_iter()
+    .map(|(n, s)| (n, s.to_string()))
+    .collect();
 
     let chokes: HashMap<u8, Vec<u8>> = [
         (42, vec![46, 23, 21]),
         (44, vec![46, 23, 21]),
         (23, vec![46]),
-    ].into_iter().collect();
+    ]
+    .into_iter()
+    .collect();
 
     NoteMapping {
         name: "General MIDI".to_string(),

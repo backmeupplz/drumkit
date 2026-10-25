@@ -4,10 +4,10 @@ mod state;
 
 use anyhow::Result;
 use crossterm::{
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{widgets::ListState, Terminal};
+use ratatui::{Terminal, widgets::ListState};
 use std::io::stdout;
 use std::path::PathBuf;
 
@@ -149,9 +149,10 @@ pub fn run_setup(
     let mut kit_list_state = ListState::default();
     if !kits.is_empty() {
         let default_idx = if preset_kit.is_none() {
-            saved.kit_path.as_ref().and_then(|saved_path| {
-                kits.iter().position(|k| k.path == *saved_path)
-            })
+            saved
+                .kit_path
+                .as_ref()
+                .and_then(|saved_path| kits.iter().position(|k| k.path == *saved_path))
         } else {
             None
         };
@@ -160,9 +161,10 @@ pub fn run_setup(
     let mut audio_list_state = ListState::default();
     if !audio_devices.is_empty() {
         let default_idx = if preset_audio.is_none() {
-            saved.audio_device.as_ref().and_then(|saved_name| {
-                audio_devices.iter().position(|d| d.name == *saved_name)
-            })
+            saved
+                .audio_device
+                .as_ref()
+                .and_then(|saved_name| audio_devices.iter().position(|d| d.name == *saved_name))
         } else {
             None
         };
@@ -171,9 +173,10 @@ pub fn run_setup(
     let mut midi_list_state = ListState::default();
     if !midi_devices.is_empty() {
         let default_idx = if preset_midi.is_none() {
-            saved.midi_device.as_ref().and_then(|saved_name| {
-                midi_devices.iter().position(|d| d.name == *saved_name)
-            })
+            saved
+                .midi_device
+                .as_ref()
+                .and_then(|saved_name| midi_devices.iter().position(|d| d.name == *saved_name))
         } else {
             None
         };
@@ -226,7 +229,13 @@ pub fn run_setup(
         kit_repos: state_kit_repos,
     };
 
-    let result = events::setup_event_loop(&mut terminal, &mut setup_state, &capture, preset_audio, preset_midi);
+    let result = events::setup_event_loop(
+        &mut terminal,
+        &mut setup_state,
+        &capture,
+        preset_audio,
+        preset_midi,
+    );
 
     disable_raw_mode()?;
     stdout().execute(LeaveAlternateScreen)?;

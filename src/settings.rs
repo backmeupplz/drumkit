@@ -106,7 +106,10 @@ mod tests {
         // Read back
         let read = std::fs::read_to_string(&path).unwrap();
         let loaded: Settings = toml::from_str(&read).unwrap();
-        assert_eq!(loaded.kit_path.unwrap(), PathBuf::from("/home/user/kits/linndrum"));
+        assert_eq!(
+            loaded.kit_path.unwrap(),
+            PathBuf::from("/home/user/kits/linndrum")
+        );
         assert_eq!(loaded.audio_device.unwrap(), "HDA Intel PCH");
         assert_eq!(loaded.midi_device.unwrap(), "Alesis Nitro Max MIDI 1");
     }

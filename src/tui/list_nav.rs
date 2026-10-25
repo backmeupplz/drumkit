@@ -19,7 +19,11 @@ pub(crate) fn list_down(list_state: &mut ListState, len: usize) {
 }
 
 /// Move a `ListState` selection up, skipping rows where `is_selectable` returns false.
-pub(crate) fn list_up_skip(list_state: &mut ListState, len: usize, is_selectable: impl Fn(usize) -> bool) {
+pub(crate) fn list_up_skip(
+    list_state: &mut ListState,
+    len: usize,
+    is_selectable: impl Fn(usize) -> bool,
+) {
     if len == 0 {
         return;
     }
@@ -36,7 +40,11 @@ pub(crate) fn list_up_skip(list_state: &mut ListState, len: usize, is_selectable
 }
 
 /// Move a `ListState` selection down, skipping rows where `is_selectable` returns false.
-pub(crate) fn list_down_skip(list_state: &mut ListState, len: usize, is_selectable: impl Fn(usize) -> bool) {
+pub(crate) fn list_down_skip(
+    list_state: &mut ListState,
+    len: usize,
+    is_selectable: impl Fn(usize) -> bool,
+) {
     if len == 0 {
         return;
     }
@@ -61,7 +69,11 @@ pub(crate) fn index_up(selected: &mut usize, len: usize) {
     if len == 0 {
         return;
     }
-    *selected = if *selected == 0 { len - 1 } else { *selected - 1 };
+    *selected = if *selected == 0 {
+        len - 1
+    } else {
+        *selected - 1
+    };
 }
 
 /// Move a plain `usize` index down with wrapping.
@@ -69,5 +81,9 @@ pub(crate) fn index_down(selected: &mut usize, len: usize) {
     if len == 0 {
         return;
     }
-    *selected = if *selected >= len - 1 { 0 } else { *selected + 1 };
+    *selected = if *selected >= len - 1 {
+        0
+    } else {
+        *selected + 1
+    };
 }
