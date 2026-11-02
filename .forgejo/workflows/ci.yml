@@ -14,7 +14,7 @@ jobs:
   check:
     # Our pushes and PRs run on the Mac runners with a persistent, incremental target dir; outsider PRs (bridged in by
     # the `github` bot) never touch the Mac and run on Linux.
-    runs-on: ${{ (github.event_name != 'pull_request' || contains(fromJSON('["backmeupplz","renovate","claude"]'), github.event.pull_request.user.login)) && 'macos-latest' || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || contains(fromJSON('["backmeupplz","renovate","claude","radiant"]'), github.event.pull_request.user.login)) && 'macos-latest' || 'ubuntu-latest' }}
     env:
       CARGO_PROFILE_DEV_DEBUG: 0
     steps:
