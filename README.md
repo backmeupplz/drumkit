@@ -81,7 +81,7 @@ cargo install --path .
 
 ### Build dependencies
 
-- Rust 1.75+
+- Rust 1.85+
 - **Linux:** ALSA development libraries: `sudo pacman -S alsa-lib` (Arch) or `sudo apt install libasound2-dev` (Debian/Ubuntu)
 - **macOS:** No additional dependencies — CoreAudio and CoreMIDI are provided by the system
 - **Windows:** No additional dependencies — WASAPI and Windows MIDI are provided by the system

@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
 /// Normalize user input into `owner/repo` format.
 ///
@@ -73,7 +75,6 @@ pub fn build_store_rows(kits: &[RemoteKit]) -> Vec<StoreRow> {
 /// Information about a single file in the remote tree.
 struct TreeBlob {
     path: String,
-    #[allow(dead_code)]
     size: u64,
 }
 
@@ -88,14 +89,42 @@ fn raw_base(repo: &str) -> String {
     format!("https://raw.githubusercontent.com/{}/main", repo)
 }
 
+/// Hard cap on bytes written per kit download, so a hostile repo can't fill the disk.
+const MAX_KIT_BYTES: u64 = 2 << 30;
+
+/// One shared agent: connection reuse, HTTPS only, and no hanging forever on a stalled server.
+static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
+    ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(30))
+        .https_only(true)
+        .user_agent("drumkit")
+        .build()
+});
+
+/// A single path component that is safe to join onto a local directory on every OS:
+/// no traversal, no separators (`\` is one on Windows), no drive/stream colons,
+/// no control chars, no trailing dot/space (Windows silently strips those).
+fn safe_component(s: &str) -> bool {
+    !s.is_empty()
+        && s != "."
+        && s != ".."
+        && !s.contains(['/', '\\', ':'])
+        && !s.chars().any(char::is_control)
+        && !s.ends_with(['.', ' '])
+}
+
 fn fetch_tree(repo: &str) -> Result<serde_json::Value> {
     let url = tree_url(repo);
-    let resp: serde_json::Value = ureq::get(&url)
-        .set("User-Agent", "drumkit")
+    let resp: serde_json::Value = AGENT
+        .get(&url)
         .call()
         .with_context(|| format!("Failed to fetch tree from {}", repo))?
         .into_json()
         .context("Failed to parse GitHub tree response")?;
+    if resp.get("truncated").and_then(|t| t.as_bool()) == Some(true) {
+        anyhow::bail!("Repository {} is too large to list", repo);
+    }
     Ok(resp)
 }
 
@@ -155,8 +184,10 @@ fn fetch_kit_list_single(repo: &str, local_dirs: &[PathBuf]) -> Result<Vec<Remot
             .unwrap_or(0);
 
         // Only include files inside a top-level directory (skip root files like README)
-        if let Some(slash_pos) = path.find('/') {
-            let kit_name = &path[..slash_pos];
+        if let Some((kit_name, _)) = path.split_once('/') {
+            if !safe_component(kit_name) {
+                continue;
+            }
             let entry = kits_map.entry(kit_name.to_string()).or_insert((0, 0));
             entry.0 += 1;
             entry.1 += size;
@@ -191,6 +222,9 @@ pub fn download_kit(
     progress: &Arc<AtomicUsize>,
     total: &Arc<AtomicUsize>,
 ) -> Result<PathBuf> {
+    // Also rejects the "[error: ...]" placeholder rows from fetch_kit_list.
+    anyhow::ensure!(safe_component(name), "Invalid kit name '{}'", name);
+
     let target_dir = default_kits_dir().context("Cannot determine kits directory")?;
     std::fs::create_dir_all(&target_dir).context("Failed to create kits directory")?;
 
@@ -237,6 +271,13 @@ pub fn download_kit(
     if blobs.is_empty() {
         anyhow::bail!("No files found for kit '{}'", name);
     }
+    let declared: u64 = blobs.iter().map(|b| b.size).sum();
+    anyhow::ensure!(
+        declared <= MAX_KIT_BYTES,
+        "Kit '{}' is too large ({})",
+        name,
+        format_size(declared)
+    );
 
     total.store(blobs.len(), Ordering::Relaxed);
     progress.store(0, Ordering::Relaxed);
@@ -248,9 +289,34 @@ pub fn download_kit(
     }
     std::fs::create_dir_all(&tmp_path)?;
 
+    let result = download_blobs(repo, &prefix, &blobs, &tmp_path, progress);
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&tmp_path);
+    }
+    result?;
+
+    // Atomic rename
+    std::fs::rename(&tmp_path, &final_path).context("Failed to finalize kit download")?;
+
+    Ok(final_path)
+}
+
+fn download_blobs(
+    repo: &str,
+    prefix: &str,
+    blobs: &[TreeBlob],
+    tmp_path: &Path,
+    progress: &Arc<AtomicUsize>,
+) -> Result<()> {
     let base = raw_base(repo);
-    for blob in &blobs {
+    let mut budget = MAX_KIT_BYTES;
+    for blob in blobs {
         let relative = &blob.path[prefix.len()..];
+        anyhow::ensure!(
+            relative.split('/').all(safe_component),
+            "Refusing unsafe path in kit: {}",
+            blob.path
+        );
         let dest = tmp_path.join(relative);
 
         if let Some(parent) = dest.parent() {
@@ -258,24 +324,27 @@ pub fn download_kit(
         }
 
         let url = format!("{}/{}", base, blob.path);
-        let response = ureq::get(&url)
-            .set("User-Agent", "drumkit")
+        let response = AGENT
+            .get(&url)
             .call()
             .with_context(|| format!("Failed to download {}", blob.path))?;
 
-        let mut reader = response.into_reader();
+        // The declared tree sizes are only a hint; enforce the cap on actual bytes.
+        let mut reader = response.into_reader().take(budget + 1);
         let mut file = std::fs::File::create(&dest)
             .with_context(|| format!("Failed to create {}", dest.display()))?;
-        std::io::copy(&mut reader, &mut file)
+        let written = std::io::copy(&mut reader, &mut file)
             .with_context(|| format!("Failed to write {}", dest.display()))?;
+        anyhow::ensure!(
+            written <= budget,
+            "Kit exceeds {}",
+            format_size(MAX_KIT_BYTES)
+        );
+        budget -= written;
 
         progress.fetch_add(1, Ordering::Relaxed);
     }
-
-    // Atomic rename
-    std::fs::rename(&tmp_path, &final_path).context("Failed to finalize kit download")?;
-
-    Ok(final_path)
+    Ok(())
 }
 
 /// Return the default kits directory (`$XDG_DATA_HOME/drumkit/kits` or
@@ -395,6 +464,26 @@ mod tests {
     #[test]
     fn normalize_rejects_no_slash() {
         assert_eq!(normalize_repo_input("just-a-name"), None);
+    }
+
+    #[test]
+    fn safe_component_blocks_traversal() {
+        assert!(safe_component("Acoustic Kit"));
+        assert!(safe_component("kick_v1.wav"));
+        for bad in [
+            "",
+            ".",
+            "..",
+            "..\\..\\AppData",
+            "C:evil",
+            "a/b",
+            "trailing.",
+            "trailing ",
+            "nul\0",
+            "[error: GET https://x: 404]",
+        ] {
+            assert!(!safe_component(bad), "{bad:?} should be rejected");
+        }
     }
 
     #[test]

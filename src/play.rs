@@ -264,7 +264,11 @@ fn cmd_play_direct_inner(
     let stream_sample_rate = loaded_kit.sample_rate;
     let stream_channels = loaded_kit.channels;
 
-    let shared_kit_path = Arc::new(ArcSwap::from_pointee(kit_path.clone()));
+    let shared_kit_path = Arc::new(ArcSwap::from_pointee((
+        kit_path.clone(),
+        stream_sample_rate,
+        stream_channels,
+    )));
     let suppress_reload = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let debounce_shared_notes = Arc::clone(&shared_notes);
@@ -285,8 +289,12 @@ fn cmd_play_direct_inner(
                             last_event = None;
                             continue;
                         }
-                        let current_path = debounce_kit_path.load();
-                        match kit::load_kit(&current_path) {
+                        let current = debounce_kit_path.load();
+                        // Read the live stream format: the TUI rebuilds the stream on kit switch.
+                        let (current_path, stream_sample_rate, stream_channels) = &**current;
+                        let (stream_sample_rate, stream_channels) =
+                            (*stream_sample_rate, *stream_channels);
+                        match kit::load_kit(current_path) {
                             Ok(new_kit) => {
                                 if new_kit.sample_rate != stream_sample_rate {
                                     let _ = debounce_tui_tx.send(tui::TuiEvent::KitReloadError(
@@ -306,7 +314,7 @@ fn cmd_play_direct_inner(
                                     let note_keys = kit::note_keys(&new_kit.notes);
                                     debounce_shared_notes.store(Arc::new(new_kit.notes));
                                     if let Some(new_mapping) =
-                                        mapping::load_kit_mapping(&current_path)
+                                        mapping::load_kit_mapping(current_path)
                                     {
                                         debounce_shared_mapping
                                             .store(Arc::new(new_mapping.clone()));

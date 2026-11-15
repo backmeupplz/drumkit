@@ -127,7 +127,7 @@ pub(super) fn event_loop(
                             state.popup = Some(Popup::NoteRename {
                                 note: entry.note,
                                 input: entry.name.clone(),
-                                cursor: entry.name.len(),
+                                cursor: entry.name.chars().count(),
                             });
                         }
                     }
@@ -300,7 +300,11 @@ pub(super) fn event_loop(
                                 .watcher
                                 .watch(path.as_ref(), notify::RecursiveMode::NonRecursive);
                             resources.kit_path = path.clone();
-                            resources.shared_kit_path.store(Arc::new(path.clone()));
+                            resources.shared_kit_path.store(Arc::new((
+                                path.clone(),
+                                resources.sample_rate,
+                                resources.channels,
+                            )));
 
                             // Auto-apply kit mapping if available, otherwise fall back to default
                             let new_mapping = mapping::load_kit_mapping(&path)

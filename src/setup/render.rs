@@ -107,8 +107,8 @@ fn render_breadcrumb(frame: &mut Frame, area: Rect, state: &SetupState) {
     };
     match &state.selected_audio {
         Some((name, _)) if state.step == SetupStep::MidiPort => {
-            let display = if name.len() > 20 {
-                format!("Audio: {}...", &name[..17])
+            let display = if name.chars().count() > 20 {
+                format!("Audio: {}...", crate::tui::widgets::truncate(name, 17))
             } else {
                 format!("Audio: {}", name)
             };

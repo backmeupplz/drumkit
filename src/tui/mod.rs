@@ -128,7 +128,9 @@ pub struct PlayResources {
     pub producer: Arc<Mutex<Option<rtrb::Producer<audio::AudioCommand>>>>,
     pub shared_notes: Arc<ArcSwap<HashMap<u8, Arc<kit::NoteGroup>>>>,
     pub kit_path: PathBuf,
-    pub shared_kit_path: Arc<ArcSwap<PathBuf>>,
+    /// Current kit path plus the sample rate/channels the audio stream runs at,
+    /// read by the hot-reload thread.
+    pub shared_kit_path: Arc<ArcSwap<(PathBuf, u32, u16)>>,
     pub suppress_reload: Arc<AtomicBool>,
     pub sample_rate: u32,
     pub channels: u16,

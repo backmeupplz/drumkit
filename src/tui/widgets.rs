@@ -51,6 +51,11 @@ pub(crate) fn content_footer_split(inner: Rect) -> (Rect, Rect) {
     (content, footer)
 }
 
+/// Truncate to at most `max` chars without splitting a UTF-8 sequence.
+pub(crate) fn truncate(s: &str, max: usize) -> &str {
+    s.char_indices().nth(max).map_or(s, |(b, _)| &s[..b])
+}
+
 /// Render a single-line text input with a visible block cursor.
 pub(crate) fn render_text_input(
     frame: &mut Frame,
@@ -60,23 +65,16 @@ pub(crate) fn render_text_input(
     color: Color,
 ) {
     let w = area.width as usize;
-    let display_input = if input.len() + 3 > w {
-        let start = cursor.saturating_sub(w.saturating_sub(4));
-        &input[start..]
+    let chars: Vec<char> = input.chars().collect();
+    let start = if chars.len() + 3 > w {
+        cursor.saturating_sub(w.saturating_sub(4))
     } else {
-        input
+        0
     };
-    let cursor_in_display = cursor.min(display_input.len());
-
-    let before = &display_input[..cursor_in_display];
-    let cursor_char = display_input
-        .get(cursor_in_display..cursor_in_display + 1)
-        .unwrap_or(" ");
-    let after = if cursor_in_display + 1 <= display_input.len() {
-        &display_input[cursor_in_display + 1..]
-    } else {
-        ""
-    };
+    let cursor = cursor.clamp(start, chars.len());
+    let before: String = chars[start..cursor].iter().collect();
+    let cursor_char = chars.get(cursor).map_or(" ".to_string(), |c| c.to_string());
+    let after: String = chars.get(cursor + 1..).unwrap_or_default().iter().collect();
 
     let line = Line::from(vec![
         Span::styled(" > ", Style::default().fg(color)),
@@ -114,11 +112,7 @@ pub(crate) fn render_progress_popup(
     }
 
     let name_w = inner.width as usize;
-    let display_name = if name.len() > name_w {
-        &name[..name_w]
-    } else {
-        name
-    };
+    let display_name = truncate(name, name_w);
 
     let bar_w = (inner.width as usize).saturating_sub(2);
     let (filled, empty) = if tot == 0 || bar_w == 0 {

@@ -8,6 +8,7 @@ use ratatui::{
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use super::widgets::truncate;
 use super::{AppState, FLASH_DURATION_MS, PadState, render_popups};
 
 pub(super) fn ui(
@@ -238,11 +239,7 @@ fn render_pad_grid(frame: &mut Frame, area: Rect, state: &AppState) {
         let (border_color, text_color, bg) = flash_styles(green);
 
         let inner_w = (pad_width as usize).saturating_sub(2);
-        let name_display = if pad.name.len() > inner_w {
-            &pad.name[..inner_w]
-        } else {
-            &pad.name
-        };
+        let name_display = truncate(&pad.name, inner_w);
 
         let note_line = if velocity > 0 {
             format!("{:>3} v{}", pad.note, velocity)
@@ -319,7 +316,7 @@ fn render_pad_list_compact(frame: &mut Frame, area: Rect, state: &AppState, now:
             format!("{:>3} {}", pad.note, pad.name)
         };
 
-        let display = if label.len() > w { &label[..w] } else { &label };
+        let display = truncate(&label, w);
 
         lines.push(Line::from(Span::styled(
             display.to_string(),
@@ -389,11 +386,7 @@ fn render_hit_log(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let mut lines = Vec::with_capacity(max_lines);
     for entry in state.hit_log.iter().take(max_lines) {
-        let name = if entry.name.len() > name_w {
-            &entry.name[..name_w]
-        } else {
-            &entry.name
-        };
+        let name = truncate(&entry.name, name_w);
 
         let mut spans = vec![
             Span::raw(" "),

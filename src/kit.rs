@@ -32,23 +32,22 @@ pub struct SampleFileInfo {
 ///   `38_v1_rr1.flac`   → note=38, v=1, rr=1
 ///   `38_v2_rr3.mp3`    → note=38, v=2, rr=3
 pub fn parse_sample_filename(filename: &str) -> Option<SampleFileInfo> {
-    let stem = AUDIO_EXTENSIONS
-        .iter()
-        .find_map(|ext| filename.strip_suffix(&format!(".{ext}")))?;
-
-    let parts: Vec<&str> = stem.split('_').collect();
-    if parts.is_empty() {
+    let (stem, ext) = filename.rsplit_once('.')?;
+    if !is_audio_file(OsStr::new(ext)) {
         return None;
     }
 
-    let note: u8 = parts[0].parse().ok()?;
+    let parts: Vec<&str> = stem.split('_').collect();
+
+    let note: u8 = parts[0].parse().ok().filter(|&n| n <= 127)?;
 
     let mut velocity_layer = None;
     let mut round_robin = None;
 
     for part in &parts[1..] {
         if let Some(v) = part.strip_prefix('v') {
-            velocity_layer = Some(v.parse().ok()?);
+            // Layers are 1-based; v0 would make select()'s clamp(1, 0) panic.
+            velocity_layer = Some(v.parse().ok().filter(|&v| v > 0)?);
         } else if let Some(rr) = part.strip_prefix("rr") {
             round_robin = Some(rr.parse().ok()?);
         }
@@ -99,8 +98,14 @@ impl NoteGroup {
 
         // Map velocity (1-127) to layer (1..=max_v)
         // ceil(velocity * max_v / 127)
-        let layer = ((velocity as u16 * self.max_velocity_layer as u16 + 126) / 127)
-            .clamp(1, self.max_velocity_layer as u16) as u8;
+        let wanted = ((velocity as u16 * self.max_velocity_layer as u16 + 126) / 127)
+            .clamp(1, self.max_velocity_layer.max(1) as u16) as u8;
+        // Snap to the nearest layer that exists, so gaps (e.g. only v2, or v1+v3) aren't silent.
+        let layer = self
+            .variants
+            .iter()
+            .map(|v| v.velocity_layer)
+            .min_by_key(|&l| l.abs_diff(wanted))?;
 
         // Count how many RR variants exist for this layer
         let rr_count = self
@@ -388,11 +393,7 @@ pub fn discover_kits(extra_dirs: &[PathBuf]) -> Vec<DiscoveredKit> {
             let wav_count = std::fs::read_dir(&path)
                 .map(|rd| {
                     rd.filter_map(|e| e.ok())
-                        .filter(|e| {
-                            e.path()
-                                .extension()
-                                .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
-                        })
+                        .filter(|e| e.path().extension().is_some_and(is_audio_file))
                         .count()
                 })
                 .unwrap_or(0);
@@ -688,5 +689,29 @@ mod tests {
         assert_eq!(group.select(84).unwrap()[0], 2.0);
         assert_eq!(group.select(85).unwrap()[0], 3.0);
         assert_eq!(group.select(127).unwrap()[0], 3.0);
+    }
+
+    #[test]
+    fn parse_rejects_v0_and_out_of_range_notes_accepts_uppercase() {
+        assert!(parse_sample_filename("36_v0.wav").is_none());
+        assert!(parse_sample_filename("200.wav").is_none());
+        assert_eq!(parse_sample_filename("36_V1.WAV").unwrap().note, 36);
+        assert_eq!(parse_sample_filename("38.Flac").unwrap().note, 38);
+    }
+
+    #[test]
+    fn select_snaps_to_nearest_existing_layer() {
+        let only_v2 = NoteGroup {
+            variants: vec![SampleVariant {
+                samples: Arc::new(vec![2.0]),
+                velocity_layer: 2,
+                round_robin: 1,
+            }],
+            max_velocity_layer: 2,
+            max_round_robin: 1,
+            rr_counter: AtomicUsize::new(0),
+        };
+        assert_eq!(only_v2.select(1).unwrap()[0], 2.0);
+        assert_eq!(only_v2.select(127).unwrap()[0], 2.0);
     }
 }

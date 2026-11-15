@@ -7,6 +7,10 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
+/// Decoded-size cap per file (~4 min of 48 kHz stereo, ~90 MB): a drum hit is seconds long,
+/// so this only stops a hostile kit from decoding hours of audio into RAM.
+const MAX_SAMPLES: usize = 48_000 * 2 * 240;
+
 /// Decoded audio sample data
 pub struct SampleData {
     pub samples: Vec<f32>,
@@ -93,6 +97,18 @@ pub fn load_audio(path: &Path) -> Result<SampleData> {
         let current_len = all_samples.len();
         if sample_buf.samples().len() > expected {
             all_samples.truncate(current_len - (sample_buf.samples().len() - expected));
+        }
+        anyhow::ensure!(
+            all_samples.len() <= MAX_SAMPLES,
+            "{} is too long for a drum sample",
+            path.display()
+        );
+    }
+
+    // Float WAVs can carry NaN/Inf, which would poison the mixer.
+    for s in &mut all_samples {
+        if !s.is_finite() {
+            *s = 0.0;
         }
     }
 
